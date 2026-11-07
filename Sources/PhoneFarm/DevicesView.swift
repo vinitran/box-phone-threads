@@ -9,6 +9,7 @@ struct DevicesView: View {
     @State private var reportsUpdateFailure = false
     @State private var proxyDevice: AndroidDevice?
     @State private var threadsDevice: AndroidDevice?
+    @State private var profileDevice: AndroidDevice?
     @State private var infoDevice: AndroidDevice?
     @State private var showThreadsSettings = false
     @State private var filter: DeviceFilter = .all
@@ -74,6 +75,9 @@ struct DevicesView: View {
         }
         .sheet(item: $threadsDevice) { device in
             ThreadsFeedSheet(device: device) { manager.reportActivity(device, progress: DeviceProgress(message: $0)) }
+        }
+        .sheet(item: $profileDevice) { device in
+            ThreadsFeedSheet(device: device, profileOnly: true) { manager.reportActivity(device, progress: DeviceProgress(message: $0)) }
         }
         .sheet(item: $infoDevice) { device in
             DeviceInfoSheet(device: device)
@@ -266,6 +270,9 @@ struct DevicesView: View {
                         DeviceCard(device: device, manager: manager,
                                    showInfo: { infoDevice = device },
                                    showProxy: { proxyDevice = device },
+                                   openProfile: {
+                                       Task { if await manager.openThreads(device) { profileDevice = device } }
+                                   },
                                    openManual: {
                                        Task { if await manager.openThreads(device) { threadsDevice = device } }
                                    })
@@ -347,6 +354,7 @@ private struct DeviceCard: View {
     @ObservedObject var manager: DeviceManager
     let showInfo: () -> Void
     let showProxy: () -> Void
+    let openProfile: () -> Void
     let openManual: () -> Void
 
     private var isRunning: Bool { manager.runningThreads.contains(device.id) }
@@ -370,6 +378,12 @@ private struct DeviceCard: View {
             proxyRow
             Divider()
             actions
+            Button(action: openProfile) {
+                Label("Ảnh đại diện & Bio", systemImage: "person.crop.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!canUse || isRunning)
         }
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor),

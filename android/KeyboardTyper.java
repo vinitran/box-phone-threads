@@ -20,6 +20,9 @@ final class KeyboardTyper {
     private final int maximum;
     private final int total;
     private int done;
+    /** Per-comment speed: some replies are typed a little faster or slower than others. */
+    private final double sessionPace;
+    private final double keyboardWidth;
 
     private static final class TypingFailure extends Exception {
         final String status;
@@ -46,6 +49,10 @@ final class KeyboardTyper {
             count += segment.getString("keys").length() + segment.getString("separator").length();
         }
         total = count;
+        sessionPace = Math.exp(0.12 * random.nextGaussian());
+        Rect q = keyboard.keys.get("q");
+        Rect p = keyboard.keys.get("p");
+        keyboardWidth = q != null && p != null ? Math.max(1, p.right - q.left) : 1_000;
     }
 
     static JSONObject type(UiAutomation automation, JSONObject request) throws Exception {
@@ -60,6 +67,8 @@ final class KeyboardTyper {
 
     private void run(JSONArray segments) throws Exception {
         checkFocus();
+        // A person reads the composer and starts typing after a moment, not instantly.
+        if (minimum != maximum) SystemClock.sleep(random.nextLong(700, 2_001));
         // Typed text is not compared with the requested reply: Gboard may change words and typing continues.
         for (int index = 0; index < segments.length(); index++) {
             checkKeyboard();
@@ -67,7 +76,7 @@ final class KeyboardTyper {
             String word = normalize(segment.getString("text"));
             String keys = segment.getString("keys");
             String separator = segment.getString("separator");
-            typeWord(keys, true);
+            typeWord(word, keys, true);
             boolean addedSpace = !separator.isEmpty() && !word.isEmpty() && commitSuggestion(word, false);
             if (addedSpace && !separator.equals(" ")) {
                 // Gboard adds a space when accepting a candidate. Remove only that new space
@@ -86,11 +95,16 @@ final class KeyboardTyper {
         }
     }
 
-    private void typeWord(String keys, boolean progress) throws Exception {
-        double pace = random.nextDouble(.2, .8);
+    private void typeWord(String word, String keys, boolean progress) throws Exception {
         boolean checkCase = true;
+        // Telex adds keys beyond the visible letters; a trailing tone key gets a short hesitation.
+        boolean toneAtEnd = keys.length() > word.length() && "sfrxjSFRXJ".indexOf(keys.charAt(keys.length() - 1)) >= 0;
         for (int index = 0; index < keys.length(); index++) {
             char key = keys.charAt(index);
+            if (index > 0) {
+                boolean tone = toneAtEnd && index == keys.length() - 1;
+                SystemClock.sleep(keyInterval(keys.charAt(index - 1), key, index == 1, tone));
+            }
             if (Character.isLetter(key) && (checkCase || Character.isUpperCase(key))) {
                 KeyboardReader.Layout state = KeyboardReader.layout(automation);
                 if (state.isUppercase() != Character.isUpperCase(key)) tap(keyboard.keys.get("shift"));
@@ -98,13 +112,33 @@ final class KeyboardTyper {
             }
             key(key, progress);
             if (Character.isUpperCase(key)) checkCase = true;
-            long delay = minimum;
-            if (maximum > minimum) {
-                double fraction = Math.max(0, Math.min(1, pace + random.nextDouble(-.2, .2)));
-                delay += Math.round((maximum - minimum) * fraction);
-            }
-            SystemClock.sleep(delay);
         }
+    }
+
+    /**
+     * Time between two key taps inside a word. Human inter-key intervals are right-skewed
+     * (log-normal), grow with the distance the thumb travels and shrink for a repeated key.
+     */
+    private long keyInterval(char previous, char next, boolean early, boolean tone) {
+        if (minimum == maximum) return minimum;
+        double median = (minimum + maximum) / 2.0 * sessionPace;
+        Rect from = keyboard.keys.get(String.valueOf(Character.toLowerCase(previous)));
+        Rect to = keyboard.keys.get(String.valueOf(Character.toLowerCase(next)));
+        if (Character.toLowerCase(previous) == Character.toLowerCase(next)) {
+            median *= 0.6;
+        } else if (from != null && to != null) {
+            double distance = Math.hypot(from.centerX() - to.centerX(), from.centerY() - to.centerY());
+            median *= 0.8 + 0.45 * Math.min(1, distance / (keyboardWidth * 0.7));
+        }
+        if (early) median *= 1.15;
+        if (tone) median *= 1.35;
+        double sample = median * Math.exp(0.33 * random.nextGaussian());
+        return Math.round(Math.max(minimum * 0.5, Math.min(maximum * 3.0, sample)));
+    }
+
+    /** Log-normal pause scaled by the comment's pace. */
+    private long pause(double median, double spread) {
+        return Math.round(median * sessionPace * Math.exp(spread * random.nextGaussian()));
     }
 
     private void key(char key, boolean progress) throws Exception {
@@ -145,11 +179,16 @@ final class KeyboardTyper {
 
     private void pauseAfter(String separator) {
         if (minimum == maximum) { SystemClock.sleep(minimum); return; }
-        if (separator.equals(".") || separator.equals("\n")) SystemClock.sleep(random.nextLong(450, 901));
-        else if (separator.equals(",")) SystemClock.sleep(random.nextLong(250, 551));
-        else {
-            SystemClock.sleep(random.nextLong(120, 281));
-            if (random.nextDouble() < .08) SystemClock.sleep(random.nextLong(180, 421));
+        if (separator.equals(".") || separator.equals("\n")) {
+            SystemClock.sleep(Math.min(4_000, pause(1_300, .35)));
+            // Sometimes re-read what was written before the next sentence.
+            if (random.nextDouble() < .25) SystemClock.sleep(random.nextLong(800, 2_501));
+        } else if (separator.equals(",")) {
+            SystemClock.sleep(Math.min(2_500, pause(650, .35)));
+        } else {
+            SystemClock.sleep(Math.min(1_500, pause(330, .4)));
+            // An occasional longer stop, as if thinking about the next word.
+            if (random.nextDouble() < .06) SystemClock.sleep(random.nextLong(1_200, 3_501));
         }
     }
 
@@ -180,11 +219,15 @@ final class KeyboardTyper {
         checkFocus();
         if (rect == null || rect.isEmpty()) throw new TypingFailure("keyboard_unavailable");
         long down = SystemClock.uptimeMillis();
-        float x = rect.centerX() + (float) random.nextDouble(-.1, .1) * rect.width();
-        float y = rect.centerY() + (float) random.nextDouble(-.1, .1) * rect.height();
+        // Thumb taps cluster around the key centre, slightly below it.
+        double dx = Math.max(-.3, Math.min(.3, .12 * random.nextGaussian()));
+        double dy = Math.max(-.25, Math.min(.35, .06 + .1 * random.nextGaussian()));
+        float x = rect.centerX() + (float) dx * rect.width();
+        float y = rect.centerY() + (float) dy * rect.height();
         float pressure = (float) random.nextDouble(.45, .75);
+        long hold = Math.round(Math.max(45, Math.min(160, 85 * Math.exp(.25 * random.nextGaussian()))));
         inject(down, MotionEvent.ACTION_DOWN, x, y, pressure);
-        try { SystemClock.sleep(random.nextLong(30, 61)); }
+        try { SystemClock.sleep(hold); }
         finally { inject(down, MotionEvent.ACTION_UP, x, y, 0); }
     }
 

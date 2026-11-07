@@ -522,8 +522,8 @@ public final class ThreadsReader {
             AccessibilityNodeInfo done = waitFor(automation, "profile_editor_card_done_button");
             if (done == null || findLabel(threadsRoot(automation), bio) == null
                     || !press(automation, done)) return outcome("bio_unavailable");
-            for (int check = 0; check < 14; check++) {
-                SystemClock.sleep(200);
+            for (int check = 0; check < 40; check++) {
+                SystemClock.sleep(300);
                 AccessibilityNodeInfo profile = find(threadsRoot(automation), "ProfileScreen");
                 if (findLabel(profile, bio) != null) return outcome("bio_saved");
             }
@@ -536,7 +536,7 @@ public final class ThreadsReader {
         for (int attempt = 0; attempt < 12; attempt++) {
             SystemClock.sleep(180);
             AccessibilityNodeInfo photo = findLabel(threadsRoot(automation),
-                "Add Profile Picture", "Edit Profile Picture", "Change Profile Picture",
+                    "Add Profile Picture", "Edit Profile Picture", "Change Profile Picture", "Profile Picture",
                 "Thêm ảnh đại diện", "Đổi ảnh đại diện");
             if (photo == null || !press(automation, photo)) continue;
             for (int check = 0; check < 8; check++) {

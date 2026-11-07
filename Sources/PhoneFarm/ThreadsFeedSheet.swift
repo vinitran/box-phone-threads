@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ThreadsFeedSheet: View {
     let device: AndroidDevice
+    var profileOnly = false
     var onActivity: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var json = ""
@@ -47,21 +48,23 @@ struct ThreadsFeedSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Threads · \(device.name)").font(.title2.weight(.semibold))
-            Text("Mở tab Trang chủ trên điện thoại. Phone Farm có thể lướt xuống hoặc đọc ngẫu nhiên từ 5 đến 10 bài trong feed.")
+            Text("\(profileOnly ? "Ảnh đại diện & Bio" : "Threads") · \(device.name)").font(.title2.weight(.semibold))
+            Text(profileOnly ? "Nhập bio mới để cập nhật. Đổi ảnh đại diện sẽ mở thư viện ảnh trên điện thoại để bạn chọn và lưu." : "Mở tab Trang chủ trên điện thoại. Phone Farm có thể lướt xuống hoặc đọc ngẫu nhiên từ 5 đến 10 bài trong feed.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack {
+            if !profileOnly { HStack {
                 Button("Lướt xuống") { Task { await run(scrollOnly: true) } }
                 Button("Đọc 5–10 bài") { Task { await run(scrollOnly: false) } }
                     .buttonStyle(.borderedProminent)
                 Button("Hồ sơ") { showProfile.toggle() }
             }
             .disabled(isWorking)
+            }
 
-            if showProfile {
+            if showProfile || profileOnly {
                 HStack {
                     TextField("Bio mới", text: $bio)
+                    Button("AI tạo bio") { Task { await generateBio() } }
                     Button("Cập nhật bio") { Task { await updateProfile("bio") } }
                         .disabled(bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bio.unicodeScalars.count > 150)
                     Button("Đổi ảnh đại diện") { Task { await updateProfile("avatar") } }
@@ -238,6 +241,20 @@ struct ThreadsFeedSheet: View {
         } catch {
             status = "Không thực hiện được thao tác hồ sơ."
         }
+    }
+
+    private func generateBio() async {
+        guard !isWorking else { return }
+        guard let key = ThreadsKey.load() else { status = "Chưa mở khóa AI."; return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            status = "AI đang tạo bio…"
+            bio = try await ThreadsReplyAI.suggestBio(key: key) { message in
+                await MainActor.run { status = message }
+            }
+            status = "AI đã tạo bio. Bấm Cập nhật bio để lưu vào Threads."
+        } catch { status = error.localizedDescription }
     }
 
     private func run(scrollOnly: Bool) async {

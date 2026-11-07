@@ -68,7 +68,7 @@ enum ThreadsComment {
             progress(DeviceProgress(message: "Đang đọc vị trí phím Gboard"))
             let typing = TelexTyping(adb: adb, serial: serial)
             let context = try await typing.prepare(for: keys)
-            try await typing.typeText(text, context: context, pauseMilliseconds: 60...140, requireEmpty: true) { done, total in
+            try await typing.typeText(text, context: context, pauseMilliseconds: 140...260, requireEmpty: true) { done, total in
                 progress(DeviceProgress(message: "Đang gõ Telex · \(done)/\(total) phím",
                                         completed: done, total: total))
             }

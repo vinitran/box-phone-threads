@@ -273,7 +273,9 @@ struct TelexTyping {
                                     minimumDelay: pauseMilliseconds.lowerBound, maximumDelay: pauseMilliseconds.upperBound,
                                     requireEmpty: requireEmpty)
         let count = segments.reduce(0) { $0 + $1.keys.count + $1.separator.count }
-        let timeout = max(25, count * (pauseMilliseconds.upperBound + 150) / 1_000 + segments.count * 2 + 20)
+        // Generous bound for the human-like rhythm: skewed key intervals (up to 3× the maximum),
+        // word, comma and sentence pauses plus occasional thinking stops.
+        let timeout = max(60, count * (pauseMilliseconds.upperBound * 3 / 2 + 200) / 1_000 + segments.count * 4 + 60)
         let result = try await AndroidAccessibility.read(adb: adb, serial: serial, entry: .keyboardType, timeout: timeout,
                                                           payload: JSONEncoder().encode(request)) { update in
             if update.stage == "typing", let done = update.completed, let total = update.total {

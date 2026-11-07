@@ -110,6 +110,13 @@ enum ThreadsReplyAI {
         return text
     }
 
+    static func suggestBio(key: String, onStatus: StatusHandler? = nil) async throws -> String {
+        let text = try await complete(system: "Viết đúng một câu châm ngôn cuộc sống bằng tiếng Việt để làm bio Threads, tự nhiên, tích cực và ngắn gọn, tối đa 150 ký tự. Tự viết câu mới, không gán tên tác giả. Không liên quan mua sắm, sản phẩm, chủ đề bài viết hoặc quảng cáo ứng dụng. Không emoji, hashtag, link, tiêu đề hay ngoặc kép. Chỉ trả nội dung bio.",
+                                      input: "Tạo một câu về sống bình an, trưởng thành hoặc trân trọng những điều giản dị.", key: key, onStatus: onStatus)
+        guard !text.isEmpty, text.count <= 150, !text.contains("\n") else { throw URLError(.cannotParseResponse) }
+        return text
+    }
+
     private static func complete(system: String, input: String, key: String, onStatus: StatusHandler?) async throws -> String {
         var request = URLRequest(url: URL(string: "https://ai.hoanxu.com/v1/chat/completions")!)
         request.httpMethod = "POST"

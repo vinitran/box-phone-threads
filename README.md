@@ -50,6 +50,8 @@ App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng d
 
 ## Threads
 
+Bấm **Ảnh đại diện & Bio** trên thẻ thiết bị để mở Threads và chỉnh hồ sơ. Nhập bio mới rồi bấm **Cập nhật bio**; bấm **Đổi ảnh đại diện** để mở thư viện trên điện thoại, chọn ảnh và lưu trong Threads. Nút bị khóa khi thiết bị ngoại tuyến hoặc đang chạy chu kỳ tự động.
+
 Bấm **Chạy Threads** để bắt đầu chu kỳ tự động trên từng điện thoại. Mỗi lượt đọc ngẫu nhiên 5–10 bài gốc, bỏ các khối trả lời thụt vào và có nhãn trả lời trong feed, AI chọn một bài gần các chủ đề đã lưu nhất để bình luận và một bài khác để thả tim. AI chỉ chọn bài và soạn nội dung; mở app, chờ feed, vuốt, tìm đúng bài, thả tim, gõ Telex, chọn ảnh và đăng đều chạy bằng code.
 
 Bấm Đăng xong app tính một lượt gửi, không tìm bình luận để xác nhận trên server. **Sau mỗi lần bấm Đăng**, app trở về Trang chủ và làm mới, giữ Threads mở khoảng **60 giây** rồi tắt hẳn Threads bằng `am force-stop`, rồi nghỉ theo chế độ: **Dev 2 phút**, **Production ngẫu nhiên 20–30 phút**. Hết thời gian nghỉ, app mở lại Threads, chuẩn bị feed và tiếp tục lượt kế tiếp. Mỗi chu kỳ gồm 10 lần bấm Đăng. **Sau bình luận thứ 10**, app tắt hẳn Threads và nghỉ **3 giờ** (cả Dev lẫn Production) rồi mới bắt đầu chu kỳ mới với bộ đếm về 0. Phone Farm phải tiếp tục chạy trên Mac. Khi chu kỳ đang chạy, nút đổi thành **Đóng**; bấm **Đóng** để hủy thao tác hoặc khoảng nghỉ, không chạy lượt tiếp theo. Lỗi ngăn bấm Đăng không được tính thêm và dừng chu kỳ để tránh gửi lại bản nháp chưa rõ trạng thái.
@@ -61,7 +63,7 @@ Mỗi bình luận lấy ngẫu nhiên hai ảnh khác nhau, chèn `app_store.pn
 
 Mỗi lần bấm Đăng thành công (chu kỳ tự động hoặc điều khiển thủ công) được ghi vào bảng `comments` trong SQLite. Thẻ thiết bị hiển thị số bình luận của máy đó từ 0 giờ hôm nay theo giờ Mac, dòng tóm tắt ở đầu cửa sổ hiển thị tổng của tất cả máy.
 
-Dòng thiết bị hiển thị thao tác hiện tại, tiến độ đọc bài, tiến độ gõ Telex, thời gian chạy và kết quả cuối phiên. Bộ gõ chạy liên tục trên điện thoại, chạm từng phím với thời gian giữ và vị trí chạm biến thiên nhẹ, nhịp 60–140 ms, nghỉ theo từ và dấu câu. Khi Gboard đề xuất đổi sang từ khác, app chọn từ đúng trên thanh gợi ý trước khi gõ tiếp. App không đối chiếu nội dung đã gõ với bình luận AI soạn: nếu Gboard đổi chữ, app vẫn gõ tiếp và đăng; trước khi bấm Đăng chỉ kiểm tra ô bình luận có chữ.
+Dòng thiết bị hiển thị thao tác hiện tại, tiến độ đọc bài, tiến độ gõ Telex, thời gian chạy và kết quả cuối phiên. Bộ gõ mô phỏng nhịp gõ bằng ngón cái: chờ 0,7–2 giây trước khi gõ, mỗi bình luận có tốc độ riêng, khoảng cách giữa hai phím quanh 140–260 ms theo phân bố lệch như người thật, dài hơn khi hai phím xa nhau, nhanh hơn khi bấm lặp cùng phím (`aa`, `dd`) và ngập ngừng trước phím dấu thanh ở cuối từ. Giữa các từ nghỉ khoảng 0,3 giây, thỉnh thoảng dừng 1–3,5 giây như đang nghĩ; sau dấu phẩy và hết câu nghỉ lâu hơn. Mỗi lần chạm giữ khoảng 85 ms, điểm chạm lệch quanh tâm phím và hơi thấp xuống như ngón cái. Bình luận 150 ký tự mất khoảng 60–90 giây. Khi Gboard đề xuất đổi sang từ khác, app chọn từ đúng trên thanh gợi ý trước khi gõ tiếp. App không đối chiếu nội dung đã gõ với bình luận AI soạn: nếu Gboard đổi chữ, app vẫn gõ tiếp và đăng; trước khi bấm Đăng chỉ kiểm tra ô bình luận có chữ.
 
 Khi lỗi mạng tạm thời hoặc dịch vụ AI đang bận, app thử lại tối đa **5 lần sau lần gọi đầu tiên**, cách nhau đúng **30 giây**. Trạng thái hiển thị số lần thử lại. Mỗi yêu cầu vẫn có timeout 50 giây. Bấm Dừng hủy cả thời gian chờ; lỗi khóa truy cập không được thử lại.
 
