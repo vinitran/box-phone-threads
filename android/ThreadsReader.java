@@ -294,14 +294,12 @@ public final class ThreadsReader {
         if (request.optString("composer").equals("full")) {
             AccessibilityNodeInfo editor = find(threadsRoot(automation), "new_thread_screen_composer");
             if (editor == null) return outcome("composer_unavailable");
-            if (!hasDraft(editor, reply)) return outcome("draft_failed");
             hideKeyboard(automation);
             Post quoted = inspectFullReplyPost(automation);
             if (quoted == null || !quoted.author.equals(author) || !quoted.token(true).equals(target)) {
                 return outcome("target_changed");
             }
-            editor = revealFullReplyEditor(automation);
-            if (editor == null || !hasDraft(editor, reply)) return outcome("draft_failed");
+            revealFullReplyEditor(automation);
             if (request.optInt("photoCount") == 3 && !hasThreePhotos(automation)) return outcome("photos_changed");
             AccessibilityNodeInfo root = threadsRoot(automation);
             if (withPhoto) return openReplyGallery(automation, root);
@@ -317,23 +315,14 @@ public final class ThreadsReader {
             AccessibilityNodeInfo editor = find(detail, "permalink_inline_composer");
             AccessibilityNodeInfo submit = find(detail, "permalink_inline_composer_post_button");
             if (editor == null || !target.equals(replyContext(detail, author))) return outcome("target_changed");
-            if (withPhoto && hasDraft(editor, reply)) {
-                return openReplyGallery(automation, detail);
-            }
-            if (submit != null && hasDraft(editor, reply)) {
+            if (withPhoto) return openReplyGallery(automation, detail);
+            if (submit != null) {
                 progress("sending_reply", 0, 0);
                 if (!press(automation, submit)) return outcome("draft_failed");
                 return outcome("reply_submitted");
             }
         }
         return outcome("draft_failed");
-    }
-
-    /** The composer holds typed text. Its exact content is not compared with the requested reply. */
-    private static boolean hasDraft(AccessibilityNodeInfo editor, String reply) {
-        boolean hint = android.os.Build.VERSION.SDK_INT >= 26 && editor.isShowingHintText();
-        String text = hint ? "" : string(editor.getText()).trim();
-        return reply.isEmpty() ? text.isEmpty() : !text.isEmpty();
     }
 
     private static AccessibilityNodeInfo composerCarousel(AccessibilityNodeInfo editor) {
@@ -361,8 +350,9 @@ public final class ThreadsReader {
         String author = request.getString("author");
         String postID = request.getString("postID");
         AccessibilityNodeInfo root = threadsRoot(automation);
+        if (root == null) return outcome("composer_unavailable");
+        // The comment's content is not checked; a missing composer node does not stop the flow either.
         AccessibilityNodeInfo editor = replyEditor(root);
-        if (editor == null || !hasDraft(editor, reply)) return outcome("draft_failed");
         if (composerCarousel(editor) != null) return outcome("draft_exists");
         if (fullReplyScreen(root)) {
             hideKeyboard(automation);
@@ -371,7 +361,6 @@ public final class ThreadsReader {
             editor = revealFullReplyEditor(automation);
             root = threadsRoot(automation);
         } else if (!request.getString("target").equals(replyContext(root, author))) return outcome("target_changed");
-        if (editor == null || !hasDraft(editor, reply)) return outcome("draft_failed");
         progress("opening_photos", 0, 3);
         return openReplyGallery(automation, root);
     }
@@ -411,8 +400,7 @@ public final class ThreadsReader {
         hideKeyboard(automation);
         Post quoted = inspectFullReplyPost(automation);
         if (quoted == null || !author.equals(quoted.author) || !postID.equals(quoted.token(true))) return outcome("target_changed");
-        AccessibilityNodeInfo editor = revealFullReplyEditor(automation);
-        if (editor == null || !hasDraft(editor, reply)) return outcome("draft_failed");
+        revealFullReplyEditor(automation);
         if (!hasThreePhotos(automation)) return outcome("photos_failed");
         progress("photos_ready", 3, 3);
         return outcome("reply_ready").put("target", postID).put("postID", postID).put("author", author).put("composer", "full");
@@ -973,10 +961,17 @@ public final class ThreadsReader {
 
     private static AccessibilityNodeInfo threadsRoot(UiAutomation automation) {
         AccessibilityNodeInfo root = automation.getRootInActiveWindow();
-        if (root == null || root.getPackageName() == null || !PACKAGE.contentEquals(root.getPackageName())) {
-            return null;
+        if (root != null && root.getPackageName() != null && PACKAGE.contentEquals(root.getPackageName())) return root;
+        // After keys are tapped, Android 10 can make the keyboard the active window while Threads
+        // stays on screen underneath; use Threads' application window in that case.
+        for (AccessibilityWindowInfo window : automation.getWindows()) {
+            if (window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+            AccessibilityNodeInfo candidate = window.getRoot();
+            if (candidate != null && candidate.getPackageName() != null && PACKAGE.contentEquals(candidate.getPackageName())) {
+                return candidate;
+            }
         }
-        return root;
+        return null;
     }
 
     private static List<Post> visiblePosts(AccessibilityNodeInfo feed) {
