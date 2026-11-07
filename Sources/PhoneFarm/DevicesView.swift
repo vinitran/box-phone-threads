@@ -624,7 +624,7 @@ private struct DeviceCard: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(!canUse || isRunning || installing)
-        .help("Tải APK Threads và Instagram (lần đầu, sau đó dùng lại trên Mac), kiểm tra SHA-256 rồi cài. Máy đã có app cùng hoặc mới hơn sẽ được bỏ qua.")
+        .help("Tải APK Gboard, Threads và Instagram (lần đầu, sau đó dùng lại trên Mac), kiểm tra SHA-256 rồi cài và đặt Gboard làm bàn phím mặc định. Máy đã có app cùng hoặc mới hơn sẽ được bỏ qua. Cần đủ ba app mới chạy được Threads.")
     }
 
     /// Picks one APK, several split APKs or an .apks/.xapk bundle and installs it on this phone.
@@ -681,7 +681,7 @@ private struct DeviceCard: View {
             Menu {
                 Button("Điều khiển thủ công", action: openManual)
                 Divider()
-                Button("Cài Threads & Instagram") { Task { await manager.installBundledApps(device) } }
+                Button("Cài Gboard, Threads & Instagram") { Task { await manager.installBundledApps(device) } }
                 Button("Cài APK…", action: chooseAPK)
                 Button("Ảnh đại diện & Bio thủ công…", action: openProfile)
             } label: {
@@ -714,6 +714,7 @@ private struct DeviceCard: View {
             Button(action: runThreads) {
                 Label("Chạy Threads", systemImage: "play.fill")
             }
+            .disabled(!manager.hasRequiredApps(device))
             .buttonStyle(.borderedProminent)
             .disabled(!canUse || isRunning)
         }

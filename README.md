@@ -48,13 +48,13 @@ App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng d
 3. Bấm biểu tượng màn hình trên dòng tên của thẻ máy để mở cửa sổ scrcpy; màn hình chỉ mở khi bạn bấm. Biểu tượng chuyển màu khi đang mở. Cửa sổ hiển thị model và serial để phân biệt các máy cùng model. Phiên mở từ app tắt âm thanh.
 4. Bấm lại biểu tượng màn hình hoặc đóng trực tiếp cửa sổ scrcpy để kết thúc phiên.
 
-## Cài Threads và Instagram cho máy mới
+## Cài Gboard, Threads và Instagram cho máy mới
 
-APK của Threads và Instagram được lưu trên Cloudflare R2, mỗi app một thư mục (`threads/`, `instagram/`) gồm các file APK (base và split) cùng `manifest.json` ghi phiên bản, Android tối thiểu và SHA-256 từng file. Khi mở khóa app và sau đó mỗi 6 giờ, Phone Farm đọc manifest, tải file còn thiếu hoặc đã đổi về `~/Library/Application Support/Phone Farm/apks/` và kiểm tra SHA-256. Trạng thái hiển thị ở biểu tượng **APK** cạnh nút phiên bản (bấm để kiểm tra lại). Không có mạng thì dùng bản đã tải gần nhất.
+Mỗi máy cần đủ **Gboard, Threads và Instagram** mới bấm được **Chạy Threads** (bình luận được gõ bằng Gboard tiếng Việt Telex). APK của ba app được lưu trên Cloudflare R2, mỗi app một thư mục (`gboard/`, `threads/`, `instagram/`) gồm các file APK (base và split) cùng `manifest.json` ghi phiên bản, Android tối thiểu và SHA-256 từng file. Khi mở khóa app và sau đó mỗi 6 giờ, Phone Farm đọc manifest, tải file còn thiếu hoặc đã đổi về `~/Library/Application Support/Phone Farm/apks/` và kiểm tra SHA-256. Trạng thái hiển thị ở biểu tượng **APK** cạnh nút phiên bản (bấm để kiểm tra lại). Không có mạng thì dùng bản đã tải gần nhất.
 
-Khi một máy kết nối mà thiếu Threads hoặc Instagram, thẻ máy hiện nút **Cài Threads & Instagram**; mục cùng tên cũng có trong menu **⋯**. App đã có bản cùng hoặc mới hơn trên máy được bỏ qua; máy cần Android 9 trở lên. Sau khi cài cần mở app và đăng nhập trên điện thoại.
+Khi một máy kết nối mà thiếu app nào, thẻ máy hiện nút **Cài …** với tên các app còn thiếu; mục **Cài Gboard, Threads & Instagram** cũng có trong menu **⋯**. App đã có bản cùng hoặc mới hơn trên máy được bỏ qua. Sau khi cài, Gboard được đặt làm bàn phím mặc định. Bản Gboard trên R2 (17.1.5, arm64-v8a) chạy từ Android 8.0; các app còn lại cần Android 9 trở lên. Sau khi cài cần mở Threads, Instagram để đăng nhập và thêm **Tiếng Việt** trong Gboard trên điện thoại.
 
-Để phát hành bản APK mới: kéo APK từ một máy đã cài (`adb shell pm path <package>` rồi `adb pull`), tạo `manifest.json` cùng định dạng với `versionCode` mới và SHA-256 của từng file, rồi tải cả thư mục lên R2.
+Để phát hành bản APK mới: kéo APK từ một máy đã cài (`adb shell pm path <package>` rồi `adb pull`) hoặc giải nén file `.apkm`, tạo `manifest.json` cùng định dạng với `versionCode` mới và SHA-256 của từng file, rồi tải cả thư mục lên R2.
 
 ## Cài APK lên điện thoại
 

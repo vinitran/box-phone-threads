@@ -15,7 +15,8 @@ final class DeviceManager: ObservableObject {
     /// Identity files read from each phone (/sdcard/PhoneFarm/device.json), kept while offline.
     @Published private(set) var identities: [String: DeviceIdentity] = [:]
     private var identitiesChecked: Set<String> = []
-    /// Threads/Instagram missing on each connected phone, checked once per connection.
+    /// Required apps (Gboard, Threads, Instagram) missing on each connected phone, checked once per connection.
+    /// An empty list means the phone was checked and has all of them; no entry means not checked yet.
     @Published private(set) var missingApps: [String: [AppBundles.App]] = [:]
     private var appsChecked: Set<String> = []
 
@@ -285,8 +286,7 @@ final class DeviceManager: ObservableObject {
             appsChecked.remove(device.id)
             return
         }
-        let missing = AppBundles.apps.filter { !packages.contains($0.package) }
-        if missing.isEmpty { missingApps.removeValue(forKey: device.id) } else { missingApps[device.id] = missing }
+        missingApps[device.id] = AppBundles.apps.filter { !packages.contains($0.package) }
     }
 
     /// Downloads missing APKs once; concurrent callers share the same download.
@@ -386,7 +386,16 @@ final class DeviceManager: ObservableObject {
         updateThreadsActivity(device, progress: DeviceProgress(message: "Đang dừng chu kỳ Threads…"))
     }
 
+    /// Threads may only run after the phone was checked and has Gboard, Threads and Instagram.
+    func hasRequiredApps(_ device: AndroidDevice) -> Bool { missingApps[device.id]?.isEmpty == true }
+
     func runThreads(_ device: AndroidDevice) {
+        guard hasRequiredApps(device) else {
+            let missing = missingApps[device.id].map { $0.map(\.name).joined(separator: ", ") } ?? "chưa kiểm tra"
+            actionError = ActionError(title: "Chưa chạy được Threads trên \(device.name)",
+                                      details: "Cần cài đủ Gboard, Threads và Instagram trước (còn thiếu: \(missing)). Bấm Cài trên thẻ máy.")
+            return
+        }
         guard device.isReady, adbError == nil, runningThreads.insert(device.id).inserted else { return }
         activities[device.id] = Activity(progress: DeviceProgress(message: "Đang mở Threads"), startedAt: Date())
         threadsTasks[device.id] = Task { await self.executeThreadsLoop(device) }

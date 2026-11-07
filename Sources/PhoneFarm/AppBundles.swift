@@ -26,7 +26,10 @@ enum AppBundles {
         let files: [File]
     }
 
-    static let apps = [App(name: "Threads", package: "com.instagram.barcelona", folder: "threads"),
+    static let gboard = App(name: "Gboard", package: "com.google.android.inputmethod.latin", folder: "gboard")
+    /// Every phone needs all three before Threads can run: comments are typed with Gboard's Telex layout.
+    static let apps = [gboard,
+                       App(name: "Threads", package: "com.instagram.barcelona", folder: "threads"),
                        App(name: "Instagram", package: "com.instagram.android", folder: "instagram")]
 
     struct BundleError: LocalizedError {
@@ -126,6 +129,23 @@ enum AppBundles {
         return result
     }
 
+    /// Enables the package's keyboard and selects it. Android lists a newly installed keyboard after a short delay.
+    static func makeDefaultKeyboard(_ package: String, adb: URL, serial: String) async throws {
+        for _ in 0..<20 {
+            let list = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "ime", "list", "-a", "-s"])).result(timeout: 10).output
+            if let id = list.split(whereSeparator: \.isNewline).map({ $0.trimmingCharacters(in: .whitespaces) })
+                .first(where: { $0.hasPrefix(package + "/") }) {
+                _ = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "ime", "enable", id])).result(timeout: 10)
+                _ = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "ime", "set", id])).result(timeout: 10)
+                let current = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "settings", "get", "secure", "default_input_method"]))
+                    .result(timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines)
+                if current == id { return }
+            }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        throw BundleError("Chưa đặt được Gboard làm bàn phím mặc định. Hãy chọn Gboard trong Cài đặt → Ngôn ngữ & bàn phím.")
+    }
+
     // MARK: Prepare and install
 
     struct Prepared {
@@ -164,11 +184,15 @@ enum AppBundles {
             }
             if let current = try await installedVersion(app.package, adb: adb, serial: serial), current.code >= manifest.versionCode {
                 results.append("\(app.name) đã có (\(current.name))")
-                continue
+            } else {
+                await progress("Đang cài \(app.name) \(manifest.versionName)…")
+                _ = try await APKInstaller.install(item.files, adb: adb, serial: serial)
+                results.append("\(app.name) \(manifest.versionName)")
             }
-            await progress("Đang cài \(app.name) \(manifest.versionName)…")
-            _ = try await APKInstaller.install(item.files, adb: adb, serial: serial)
-            results.append("\(app.name) \(manifest.versionName)")
+            if app == gboard {
+                await progress("Đang đặt Gboard làm bàn phím mặc định…")
+                try await makeDefaultKeyboard(app.package, adb: adb, serial: serial)
+            }
         }
         return results.joined(separator: " · ")
     }
