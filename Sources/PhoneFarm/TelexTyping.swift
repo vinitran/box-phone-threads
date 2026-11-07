@@ -120,6 +120,35 @@ struct KeyboardContext: Equatable {
     }
 }
 
+extension KeyboardContext {
+    /// Android 10 and older: the InputMethod window covers the screen and the keyboard starts at its
+    /// top content inset (`mGivenContentInsets=[0,top][0,0]`) and ends at the bottom of the content frame.
+    /// `focusOutput` is the `dumpsys window displays` output, which holds `mCurrentFocus` on Android 10.
+    static func readLegacy(_ output: String, focusOutput: String) -> KeyboardContext? {
+        let lines = output.split(whereSeparator: \.isNewline).map(String.init)
+        guard let focus = (focusOutput + "\n" + output).split(whereSeparator: \.isNewline)
+                .first(where: { $0.contains("mCurrentFocus=Window{") }).map(String.init),
+              let start = lines.firstIndex(where: { $0.contains(" InputMethod}:") && $0.contains("Window #") }) else { return nil }
+        let block = lines[(start + 1)...].prefix { !$0.contains("Window #") }
+        guard block.contains(where: { $0.contains("isVisible=true") }),
+              block.contains(where: { $0.contains("mHasSurface=true") }),
+              block.contains(where: { $0.contains("mViewVisibility=0x0") }) else { return nil }
+        func rect(after key: String) -> [Int]? {
+            guard let line = block.first(where: { $0.contains(key) }),
+                  let range = line.range(of: key) else { return nil }
+            let values = line[range.upperBound...].prefix(while: { $0 != " " })
+                .split(whereSeparator: { !$0.isNumber && $0 != "-" }).compactMap { Int($0) }
+            return values.count == 4 ? values : nil
+        }
+        guard let frame = rect(after: "mFrame="), let insets = rect(after: "mGivenContentInsets=") else { return nil }
+        let bottom = rect(after: "content=")?[3] ?? frame[3]
+        let top = frame[1] + insets[1]
+        guard insets[1] > 0, frame[0] >= 0, frame[0] < frame[2], top < bottom else { return nil }
+        return KeyboardContext(focus: focus.trimmingCharacters(in: .whitespaces),
+                               frame: CGRect(x: frame[0], y: top, width: frame[2] - frame[0], height: bottom - top))
+    }
+}
+
 struct KeyboardCapture {
     let context: KeyboardContext
     let image: CGImage
@@ -329,7 +358,10 @@ struct TelexTyping {
 
     private func keyboardContext() async throws -> KeyboardContext {
         let result = try await command(["shell", "dumpsys window displays | grep -E 'mCurrentFocus=|type=ITYPE_IME|type=ime'"])
-        guard let context = KeyboardContext.read(result.output) else { throw TypingError.keyboardHidden }
+        if let context = KeyboardContext.read(result.output) { return context }
+        // Android 10 and older have no IME insets source in `dumpsys window displays`.
+        let windows = try await command(["shell", "dumpsys window windows"])
+        guard let context = KeyboardContext.readLegacy(windows.output, focusOutput: result.output) else { throw TypingError.keyboardHidden }
         return context
     }
 

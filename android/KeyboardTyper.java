@@ -212,7 +212,12 @@ final class KeyboardTyper {
 
     private String text() throws TypingFailure {
         if (!editor.refresh()) throw new TypingFailure("editor_changed");
-        return normalize(editor.getText() == null ? "" : editor.getText().toString());
+        // An empty field reports its hint ("Reply to…") as text on Android 10 and older; treat it as empty.
+        if (android.os.Build.VERSION.SDK_INT >= 26 && editor.isShowingHintText()) return "";
+        String value = editor.getText() == null ? "" : editor.getText().toString();
+        CharSequence hint = android.os.Build.VERSION.SDK_INT >= 26 ? editor.getHintText() : null;
+        if (hint != null && hint.length() > 0 && value.contentEquals(hint)) return "";
+        return normalize(value);
     }
 
     private void tap(Rect rect) throws Exception {
