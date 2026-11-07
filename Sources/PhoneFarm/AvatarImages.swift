@@ -7,8 +7,16 @@ enum AvatarImages {
     static let extensions: Set<String> = ["jpg", "jpeg", "png", "webp"]
     private static let settingKey = "avatar-folder"
 
+    /// Bundled avatars (Resources/ThreadsDefaults/avatars), copied once into the app's data folder
+    /// so they can be edited and do not depend on Downloads.
     static var defaultFolder: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/avatar", isDirectory: true)
+        let folder = PhoneFarmStore.databaseURL.deletingLastPathComponent().appendingPathComponent("avatars", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: folder.path),
+           let bundled = Bundle.main.resourceURL?.appendingPathComponent("ThreadsDefaults/avatars", isDirectory: true),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            try? FileManager.default.copyItem(at: bundled, to: folder)
+        }
+        return folder
     }
 
     static func folder() -> URL {

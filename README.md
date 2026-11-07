@@ -62,7 +62,7 @@ Mở menu **⋯** trên thẻ máy và chọn **Cài APK…**, rồi chọn file
 
 ## Threads
 
-Bấm **Đổi ảnh đại diện & Bio** trên thẻ thiết bị để đổi hồ sơ tự động, không cần xác nhận: AI tạo một câu bio, Phone Farm chọn ngẫu nhiên một ảnh trong thư mục ảnh đại diện (mặc định `~/Downloads/avatar`), chuyển sang điện thoại, chọn ảnh trong Threads, bấm Done ở khung cắt ảnh, rồi lưu bio và ảnh trong cùng một lần lưu Edit profile và kiểm tra bio trên trang hồ sơ. Thẻ thiết bị hiển thị từng bước; lỗi hiện thông báo. Nút bị khóa khi thiết bị ngoại tuyến, đang chạy chu kỳ tự động hoặc đang cài app.
+Bấm **Đổi ảnh đại diện & Bio** trên thẻ thiết bị để đổi hồ sơ tự động, không cần xác nhận: AI tạo một câu bio, Phone Farm chọn ngẫu nhiên một ảnh trong thư mục ảnh đại diện (mặc định là bộ 8 ảnh đóng gói sẵn trong app, chép ra `~/Library/Application Support/Phone Farm/avatars/` ở lần dùng đầu; có thể thêm, xóa ảnh trong thư mục đó), chuyển sang điện thoại, chọn ảnh trong Threads, bấm Done ở khung cắt ảnh, rồi lưu bio và ảnh trong cùng một lần lưu Edit profile và kiểm tra bio trên trang hồ sơ. Thẻ thiết bị hiển thị từng bước; lỗi hiện thông báo. Nút bị khóa khi thiết bị ngoại tuyến, đang chạy chu kỳ tự động hoặc đang cài app.
 
 Muốn tự nhập bio, xem trước hoặc đổi thư mục ảnh, chọn **⋯ → Ảnh đại diện & Bio thủ công…**: nhập bio rồi bấm **Cập nhật bio**; **Chọn ngẫu nhiên** để chọn ảnh khác, **Chọn thư mục…** để đổi nguồn (được lưu cho lần sau); **Đổi ảnh đại diện** chọn sẵn ảnh trong Threads để bạn căn chỉnh, bấm Done/Xong và lưu trên điện thoại.
 
