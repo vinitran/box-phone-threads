@@ -36,6 +36,13 @@ cp "$reader_dir/classes.dex" "$app/Contents/Resources/KeyboardReader.dex"
 cp "$binary_dir/PhoneFarm" "$app/Contents/MacOS/PhoneFarm.new"
 mv -f "$app/Contents/MacOS/PhoneFarm.new" "$app/Contents/MacOS/PhoneFarm"
 cp scripts/Info.plist "$app/Contents/Info.plist"
+# CI passes the release version and build number; local builds keep the values in Info.plist.
+if [[ -n "${PHONE_FARM_VERSION:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $PHONE_FARM_VERSION" "$app/Contents/Info.plist"
+fi
+if [[ -n "${PHONE_FARM_BUILD:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $PHONE_FARM_BUILD" "$app/Contents/Info.plist"
+fi
 ditto Resources/ThreadsDefaults "$app/Contents/Resources/ThreadsDefaults"
 if [[ -f Resources/ai-key.enc.json ]]; then
     cp Resources/ai-key.enc.json "$app/Contents/Resources/ai-key.enc.json"

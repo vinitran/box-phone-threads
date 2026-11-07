@@ -22,14 +22,16 @@ App tìm ADB trong `PATH`, các thư mục Homebrew và MacPorts phổ biến, h
 
 ## Tải bản build từ GitHub
 
-GitHub Actions (`.github/workflows/build-macos.yml`) build app universal cho Apple Silicon và Intel mỗi khi push lên `main` hoặc mở pull request. File `PhoneFarm-macOS-<commit>.zip` nằm trong mục **Artifacts** của lần chạy ở tab **Actions**. Để phát hành, đẩy tag dạng `v*`:
+GitHub Actions (`.github/workflows/build-macos.yml`) build app universal cho Apple Silicon và Intel. **Mỗi lần push lên `main`** tạo một phiên bản mới: workflow lấy tag `v*` mới nhất, tăng số cuối (v0.1.0 → v0.1.1 → v0.1.2…), ghi số đó vào app và tạo GitHub Release. Lần đầu dùng phiên bản trong `scripts/Info.plist`. Để lên số lớn hơn, đẩy tag thủ công; các lần push sau tiếp tục tăng từ tag đó:
 
 ```sh
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Workflow tạo GitHub Release kèm file zip và mã SHA-256. Bản CI được ký ad hoc, chưa notarize, nên sau khi giải nén cần bỏ cờ cách ly của macOS trước khi mở lần đầu:
+Pull request chỉ build và để file zip trong mục **Artifacts** của tab **Actions**, không tạo Release. Nếu push liên tiếp khi bản trước đang build, GitHub chỉ giữ lần push mới nhất trong hàng đợi.
+
+Mỗi Release kèm file `PhoneFarm-macOS-v<phiên bản>.zip` và mã SHA-256. Bản CI được ký ad hoc, chưa notarize, nên sau khi giải nén cần bỏ cờ cách ly của macOS trước khi mở lần đầu:
 
 ```sh
 xattr -dr com.apple.quarantine "Phone Farm.app"
