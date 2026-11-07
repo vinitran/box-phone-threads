@@ -145,10 +145,51 @@ final class KeyboardTyper {
         String name = String.valueOf(Character.toLowerCase(key));
         if (key == ' ') name = "space";
         if (key == '\n') name = "enter";
+        if ((key == ',' || key == '.') && !keyboard.keys.containsKey(name)) {
+            // Some fields (e.g. Threads' reply box) show no comma/period on the letters page.
+            symbolKey(key, progress);
+            return;
+        }
         tap(keyboard.keys.get(name));
         if (progress) {
             reportKey();
         }
+    }
+
+    /** Types a punctuation key from the symbols page ("?123"), then returns to the letters page. */
+    private void symbolKey(char key, boolean progress) throws Exception {
+        Rect symbols = label(KeyboardReader.layout(automation), "?123", "symbols", "symbol keyboard", "ký hiệu", "biểu tượng");
+        if (symbols == null) throw new TypingFailure("keyboard_unavailable");
+        tap(symbols);
+        SystemClock.sleep(random.nextLong(180, 301));
+        Rect target = null;
+        KeyboardReader.Layout page = null;
+        for (int attempt = 0; attempt < 10 && target == null; attempt++) {
+            page = KeyboardReader.layout(automation);
+            target = page.keys.get(String.valueOf(key));
+            if (target == null) SystemClock.sleep(100);
+        }
+        if (target == null) throw new TypingFailure("keyboard_unavailable");
+        tap(target);
+        if (progress) reportKey();
+        SystemClock.sleep(random.nextLong(150, 261));
+        Rect letters = label(KeyboardReader.layout(automation), "abc", "letters", "letter keyboard", "chữ cái", "bàn phím chữ");
+        if (letters != null) tap(letters);
+        for (int attempt = 0; attempt < 10; attempt++) {
+            KeyboardReader.Layout current = KeyboardReader.layout(automation);
+            if (sameKey(keyboard, current, "q")) return;
+            SystemClock.sleep(100);
+        }
+        throw new TypingFailure("keyboard_changed");
+    }
+
+    /** Finds a non-character key (like "?123" or "ABC") by its text or description. */
+    private static Rect label(KeyboardReader.Layout layout, String... names) {
+        for (java.util.Map.Entry<String, Rect> entry : layout.suggestions.entrySet()) {
+            String value = entry.getKey().toLowerCase(java.util.Locale.ROOT);
+            for (String name : names) if (value.equals(name)) return entry.getValue();
+        }
+        return null;
     }
 
     private void reportKey() throws Exception {
