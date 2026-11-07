@@ -17,10 +17,6 @@ enum ToolPaths {
         find("scrcpy", override: "SCRCPY")
     }
 
-    static func gnirehtet() -> URL? {
-        find("gnirehtet", override: "GNIREHTET")
-    }
-
     private static func find(_ name: String, override: String, extraPaths: [String] = []) -> URL? {
         let environment = ProcessInfo.processInfo.environment
         let shellDirectories = (environment["PATH"] ?? "").split(separator: ":").map(String.init)

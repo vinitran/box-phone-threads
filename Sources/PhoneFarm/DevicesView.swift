@@ -36,9 +36,6 @@ struct DevicesView: View {
             if let storageError = manager.storageError {
                 banner("Chưa lưu được dữ liệu", details: storageError)
             }
-            if manager.hasLoaded, !manager.gnirehtetAvailable {
-                banner("Chưa tìm thấy gnirehtet", details: "Cần để điện thoại lấy internet qua cáp USB. Cài bằng lệnh brew install gnirehtet, sau đó bấm Làm mới.")
-            }
             if manager.hasLoaded, !manager.scrcpyAvailable {
                 banner("Chưa tìm thấy scrcpy", details: "Cài bằng lệnh brew install scrcpy, sau đó bấm Làm mới.")
             }
@@ -511,7 +508,6 @@ private struct DeviceCard: View {
 
             Spacer(minLength: 6)
 
-            tetherButton
             screenButton
 
             HStack(spacing: 5) {
@@ -636,46 +632,6 @@ private struct DeviceCard: View {
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         let files = panel.urls
         Task { await manager.installAPK(device, files: files) }
-    }
-
-    /// Internet over the USB cable (gnirehtet). Started on connect; click to turn it off or retry.
-    @ViewBuilder
-    private var tetherButton: some View {
-        let state = manager.tether[device.id]
-        if state == .starting {
-            ProgressView().controlSize(.small).frame(width: 18)
-                .help("Đang bật internet qua cáp USB…")
-        } else {
-            Button {
-                Task {
-                    if state == .on { await manager.stopTether(device) } else { await manager.startTether(device) }
-                }
-            } label: {
-                Image(systemName: "cable.connector")
-                    .foregroundStyle(tetherColor(state))
-            }
-            .buttonStyle(.borderless)
-            .disabled(!canUse || isRunning || !manager.gnirehtetAvailable)
-            .help(tetherHelp(state))
-            .accessibilityLabel(state == .on ? "Tắt internet qua USB" : "Bật internet qua USB")
-        }
-    }
-
-    private func tetherColor(_ state: DeviceManager.TetherState?) -> Color {
-        switch state {
-        case .on: return .green
-        case .failed: return .orange
-        default: return .secondary
-        }
-    }
-
-    private func tetherHelp(_ state: DeviceManager.TetherState?) -> String {
-        switch state {
-        case .on: return "Điện thoại đang lấy internet qua cáp USB từ Mac. Bấm để tắt và dùng Wi-Fi/SIM."
-        case .failed(let message): return "Chưa bật được internet qua USB: \(message) Bấm để thử lại."
-        case .off: return "Đang dùng Wi-Fi/SIM của điện thoại. Bấm để lấy internet qua cáp USB."
-        default: return "Internet qua cáp USB"
-        }
     }
 
     /// Opens or closes this phone's screen (scrcpy). Screens open only on request.
