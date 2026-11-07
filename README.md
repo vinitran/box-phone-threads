@@ -7,7 +7,7 @@
 Cần macOS 13 trở lên, Swift 5.9 trở lên, JDK 11 trở lên và Android SDK có Platform API 24 trở lên cùng Build Tools để build. Khi chạy app, cần ADB và scrcpy để điều khiển thiết bị. Có thể cài hai công cụ này bằng Homebrew.
 
 ```sh
-brew install scrcpy
+brew install scrcpy gnirehtet
 brew install --cask android-platform-tools
 ```
 
@@ -59,6 +59,12 @@ Khi một máy kết nối mà thiếu Threads hoặc Instagram, thẻ máy hi�
 ## Cài APK lên điện thoại
 
 Mở menu **⋯** trên thẻ máy và chọn **Cài APK…**, rồi chọn file trên Mac. Có thể chọn một file `.apk`, nhiều file APK của cùng một app (split APK, ví dụ `base.apk` và các `split_config.*.apk`), hoặc file gói `.apks`/`.xapk`. Phone Farm cài bằng `adb install -r` (hoặc `install-multiple -r`), giữ dữ liệu app nếu máy đã có app. Sau khi cài, thẻ máy hiển thị kết quả và phiên bản Threads trên máy. Nếu máy đang có bản mới hơn hoặc app được ký bằng chữ ký khác, cần gỡ app cũ trước.
+
+## Internet qua cáp USB
+
+Khi một máy kết nối, Phone Farm tự bật **internet qua cáp USB** bằng [gnirehtet](https://github.com/Genymobile/gnirehtet): Mac chạy một relay chung, điện thoại cài app gnirehtet (tự cài nếu thiếu) và bật VPN chuyển toàn bộ lưu lượng qua cáp về Mac rồi ra internet bằng mạng của Mac. Quyền VPN được cấp sẵn bằng `appops`, không cần bấm OK trên điện thoại. Biểu tượng cáp trên dòng tên của thẻ máy hiển thị trạng thái (xanh: đang dùng internet qua USB, cam: lỗi, xám: tắt); bấm để tắt (quay lại Wi-Fi/SIM) hoặc bật lại. Khi thoát Phone Farm, VPN trên các điện thoại được tắt để máy dùng lại Wi-Fi/SIM.
+
+Proxy đã áp dụng vẫn hoạt động: lưu lượng tới proxy cũng đi qua cáp USB. Android tự chỉnh giờ bằng mạng riêng của máy (Wi-Fi/SIM), không qua VPN; máy không có Wi-Fi/SIM cần đặt ngày giờ đúng thủ công, nếu sai ngày các kết nối HTTPS sẽ lỗi chứng chỉ.
 
 ## Threads
 

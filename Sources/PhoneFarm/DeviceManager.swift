@@ -12,6 +12,15 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var runningThreads: Set<String> = []
     @Published private(set) var installingAPK: Set<String> = []
     @Published private(set) var updatingProfile: Set<String> = []
+
+    enum TetherState: Equatable {
+        case starting, on, off, failed(String)
+    }
+    /// Internet over USB (gnirehtet) per connected phone; started automatically on connect.
+    @Published private(set) var tether: [String: TetherState] = [:]
+    @Published private(set) var gnirehtetAvailable = true
+    private var relay: RunningCommand?
+    private var tetherChecked: Set<String> = []
     /// Threads/Instagram missing on each connected phone, checked once per connection.
     @Published private(set) var missingApps: [String: [AppBundles.App]] = [:]
     private var appsChecked: Set<String> = []
@@ -130,6 +139,7 @@ final class DeviceManager: ObservableObject {
                     storageError = nil
                     reloadCommentCounts()
                     checkInstalledApps()
+                    checkTethering()
                 } catch {
                     devices = discovered
                     storageError = error.localizedDescription
@@ -444,7 +454,70 @@ final class DeviceManager: ObservableObject {
         command.stop()
     }
 
+    // MARK: Internet over USB
+
+    private func checkTethering() {
+        gnirehtetAvailable = ToolPaths.gnirehtet() != nil
+        let ready = Set(devices.filter(\.isReady).map(\.id))
+        tetherChecked.formIntersection(ready)
+        tether = tether.filter { ready.contains($0.key) }
+        guard gnirehtetAvailable else { return }
+        for device in devices where device.isReady && !tetherChecked.contains(device.id) {
+            tetherChecked.insert(device.id)
+            Task { await startTether(device) }
+        }
+    }
+
+    func startTether(_ device: AndroidDevice) async {
+        guard device.isReady, tether[device.id] != .starting,
+              let gnirehtet = ToolPaths.gnirehtet(), let adb = ToolPaths.adb() else { return }
+        tether[device.id] = .starting
+        do {
+            try ensureRelay(gnirehtet: gnirehtet, adb: adb)
+            try await USBTether.start(serial: device.serial, gnirehtet: gnirehtet, adb: adb)
+            tether[device.id] = .on
+        } catch {
+            tether[device.id] = .failed(error.localizedDescription)
+        }
+    }
+
+    func stopTether(_ device: AndroidDevice) async {
+        guard let gnirehtet = ToolPaths.gnirehtet(), let adb = ToolPaths.adb() else { return }
+        tether[device.id] = .starting
+        await USBTether.stop(serial: device.serial, gnirehtet: gnirehtet, adb: adb)
+        tether[device.id] = .off
+    }
+
+    /// One relay on the Mac serves every phone; if it exits, phones show the failure and can retry.
+    private func ensureRelay(gnirehtet: URL, adb: URL) throws {
+        guard relay == nil else { return }
+        let command = try USBTether.startRelay(gnirehtet: gnirehtet, adb: adb)
+        relay = command
+        Task {
+            let result = await command.result(outputLimit: 65_536)
+            guard relay === command else { return }
+            relay = nil
+            let reason = "Relay gnirehtet trên Mac đã dừng. " + result.diagnostics
+            for (id, state) in tether where state == .on { tether[id] = .failed(reason) }
+        }
+    }
+
     func stopAll() {
+        // Turn the VPN off on each phone so it falls back to Wi-Fi/SIM once the Mac relay is gone.
+        if let gnirehtet = ToolPaths.gnirehtet(), let adb = ToolPaths.adb() {
+            let stops = devices.filter { tether[$0.id] == .on }.compactMap { device -> Process? in
+                let stop = Process()
+                stop.executableURL = gnirehtet
+                stop.arguments = ["stop", device.serial]
+                stop.environment = USBTether.environment(adb: adb)
+                stop.standardOutput = FileHandle.nullDevice
+                stop.standardError = FileHandle.nullDevice
+                return (try? stop.run()) != nil ? stop : nil
+            }
+            stops.forEach { $0.waitUntilExit() }
+        }
+        relay?.stop()
+        relay = nil
         for task in threadsTasks.values { task.cancel() }
         for task in photoCleanupTasks.values { task.cancel() }
         for command in sessions.values {
