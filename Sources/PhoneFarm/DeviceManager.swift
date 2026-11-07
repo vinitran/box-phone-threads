@@ -406,6 +406,14 @@ final class DeviceManager: ObservableObject {
             updateThreadsActivity(device, progress: DeviceProgress(message: "Chưa có khóa AI. Tạo file khóa mã hóa bằng lệnh --encrypt-threads-key rồi build lại app."), hasIssue: true)
             return
         }
+        // Comments are typed with Gboard's Vietnamese Telex layout; stop early on phones using another keyboard.
+        if let adb = ToolPaths.adb(),
+           let ime = try? await RunningCommand(adb, arguments: ["-s", device.serial, "shell", "settings", "get", "secure", "default_input_method"])
+                .result(timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines),
+           !ime.isEmpty, !ime.hasPrefix("com.google.android.inputmethod.latin/") {
+            updateThreadsActivity(device, progress: DeviceProgress(message: "Máy đang dùng bàn phím \(ime), chưa phải Gboard. Cài Gboard, đặt làm bàn phím mặc định và bật Tiếng Việt Telex rồi chạy lại."), hasIssue: true)
+            return
+        }
         do {
             let environment = try storage.threadsSettings().runEnvironment
             try await ThreadsLoop.run(round: { prepareFeed, cycle, ordinal in

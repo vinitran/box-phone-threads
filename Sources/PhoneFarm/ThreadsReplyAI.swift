@@ -120,7 +120,7 @@ enum ThreadsReplyAI {
     private static func complete(system: String, input: String, key: String, onStatus: StatusHandler?) async throws -> String {
         var request = URLRequest(url: URL(string: "https://ai.hoanxu.com/v1/chat/completions")!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 50
+        request.timeoutInterval = 180 // 3 minutes per AI request
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(Request(messages: [
