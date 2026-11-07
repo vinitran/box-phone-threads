@@ -3,13 +3,14 @@ import SwiftUI
 /// Shows the password prompt until the encrypted AI key is unlocked, then the device grid.
 struct RootView: View {
     let manager: DeviceManager
+    let updater: AppUpdater
     @State private var locked = ThreadsKey.needsUnlock
 
     var body: some View {
         if locked {
             UnlockView { locked = false }
         } else {
-            DevicesView(manager: manager)
+            DevicesView(manager: manager, updater: updater)
         }
     }
 }

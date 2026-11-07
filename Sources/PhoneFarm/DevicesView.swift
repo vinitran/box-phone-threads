@@ -4,6 +4,9 @@ import SwiftUI
 /// and the column count follows the window width.
 struct DevicesView: View {
     @ObservedObject var manager: DeviceManager
+    @ObservedObject var updater: AppUpdater
+    @State private var pendingUpdate: AppUpdater.Release?
+    @State private var reportsUpdateFailure = false
     @State private var proxyDevice: AndroidDevice?
     @State private var threadsDevice: AndroidDevice?
     @State private var infoDevice: AndroidDevice?
@@ -33,6 +36,30 @@ struct DevicesView: View {
                 await manager.refresh()
                 try? await Task.sleep(for: .seconds(3))
             }
+        }
+        .task {
+            // Check on launch, then every 6 hours while the app stays open.
+            while !Task.isCancelled {
+                await updater.check()
+                try? await Task.sleep(for: .seconds(6 * 60 * 60))
+            }
+        }
+        .onChange(of: updater.state) { state in
+            guard reportsUpdateFailure, case .failed(let message) = state else { return }
+            reportsUpdateFailure = false
+            manager.actionError = .init(title: "Chưa cập nhật được", details: message)
+        }
+        .confirmationDialog(pendingUpdate.map { "Cập nhật lên v\($0.version)?" } ?? "",
+                            isPresented: Binding(get: { pendingUpdate != nil }, set: { if !$0 { pendingUpdate = nil } }),
+                            presenting: pendingUpdate) { release in
+            Button("Tải và cài v\(release.version)") {
+                reportsUpdateFailure = true
+                Task { await updater.install(release) }
+            }
+            Button("Xem thay đổi trên GitHub") { NSWorkspace.shared.open(release.pageURL) }
+            Button("Để sau", role: .cancel) {}
+        } message: { _ in
+            Text(updateMessage)
         }
         .alert(item: $manager.actionError) { error in
             Alert(title: Text(error.title), message: Text(error.details), dismissButton: .default(Text("Đóng")))
@@ -98,6 +125,8 @@ struct DevicesView: View {
 
                 Spacer(minLength: 8)
 
+                updateControl
+
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Tìm theo tên hoặc serial", text: $search)
@@ -121,6 +150,57 @@ struct DevicesView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
+    }
+
+    @ViewBuilder
+    private var updateControl: some View {
+        let version = "v" + updater.currentVersion
+        switch updater.state {
+        case .available(let release):
+            Button {
+                pendingUpdate = release
+            } label: {
+                Label("Cập nhật v\(release.version)", systemImage: "arrow.down.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Đang dùng \(version). Có phiên bản v\(release.version) trên GitHub.")
+        case .installing(let message):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(message).font(.callout).foregroundStyle(.secondary)
+            }
+            .fixedSize()
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("\(version) · Đang kiểm tra…").font(.callout).foregroundStyle(.secondary)
+            }
+            .fixedSize()
+        case .failed(let message):
+            Button {
+                Task { await updater.check() }
+            } label: {
+                Label(version, systemImage: "exclamationmark.triangle")
+            }
+            .foregroundStyle(.orange)
+            .help("Chưa kiểm tra được phiên bản mới: \(message) Bấm để thử lại.")
+        case .idle, .upToDate:
+            Button {
+                Task { await updater.check() }
+            } label: {
+                Label(version, systemImage: "checkmark.seal")
+            }
+            .help(updater.state == .upToDate ? "Đang dùng bản mới nhất. Bấm để kiểm tra lại." : "Bấm để kiểm tra phiên bản mới.")
+        }
+    }
+
+    private var updateMessage: String {
+        let running = manager.runningThreads.count
+        var text = "Phone Farm sẽ tải bản mới từ GitHub, đóng app, thay bản cũ rồi tự mở lại. Bạn cần nhập lại mật khẩu."
+        if running > 0 {
+            text += " Threads đang chạy trên \(running) máy sẽ bị dừng."
+        }
+        return text
     }
 
     private var summary: String {

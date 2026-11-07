@@ -17,7 +17,7 @@ struct PhoneFarmApp: App {
 
     var body: some Scene {
         Window("Phone Farm", id: "devices") {
-            RootView(manager: delegate.manager)
+            RootView(manager: delegate.manager, updater: delegate.updater)
         }
         .defaultSize(width: 1080, height: 720)
     }
@@ -26,6 +26,7 @@ struct PhoneFarmApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let manager = DeviceManager()
+    let updater = AppUpdater()
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true

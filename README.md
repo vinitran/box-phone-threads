@@ -37,6 +37,8 @@ Mỗi Release kèm file `PhoneFarm-macOS-v<phiên bản>.zip` và mã SHA-256. B
 xattr -dr com.apple.quarantine "Phone Farm.app"
 ```
 
+**Cập nhật trong app:** sau khi mở khóa, app kiểm tra phiên bản mới trên GitHub lúc khởi động và mỗi 6 giờ. Nút phiên bản nằm cạnh ô tìm kiếm: bấm để kiểm tra lại. Khi có bản mới, nút đổi thành **Cập nhật v…**; bấm và xác nhận thì app tải file zip, đối chiếu SHA-256, kiểm tra chữ ký và phiên bản, đóng app (dừng Threads đang chạy), thay bản cũ rồi tự mở lại. Thư mục chứa app phải cho phép ghi (ví dụ Applications của tài khoản quản trị). Bản v0.1.0 chưa có nút này nên cần tải thủ công một lần.
+
 App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng dẫn ở trên.
 
 ## Sử dụng
