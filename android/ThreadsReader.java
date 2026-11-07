@@ -473,6 +473,7 @@ public final class ThreadsReader {
         if (action.equals("select_avatar")) {
             return request.optInt("photoID") > 0 ? selectAvatarPhoto(automation) : outcome("avatar_unavailable");
         }
+        if (action.equals("confirm_avatar")) return confirmAvatar(automation);
         if (!action.equals("bio") && !action.equals("avatar")) return outcome("unsupported");
         if (action.equals("bio") && (bio.isEmpty() || bio.codePointCount(0, bio.length()) > 150)) {
             return outcome("invalid_bio");
@@ -512,6 +513,19 @@ public final class ThreadsReader {
             first = grid == null || grid.getChildCount() == 0 ? null : find(grid.getChild(0), "gallery_grid_item_thumbnail");
             String label = first == null ? "" : string(first.getContentDescription());
             if (find(root, "crop_image_view") != null && (label.startsWith("Selected ") || label.startsWith("Đã chọn"))) return outcome("avatar_ready");
+        }
+        return outcome("avatar_unavailable");
+    }
+
+    /** Presses Done on the crop screen and waits for Edit profile, where the new picture waits to be saved. */
+    private static JSONObject confirmAvatar(UiAutomation automation) throws JSONException {
+        AccessibilityNodeInfo root = threadsRoot(automation);
+        if (find(root, "crop_image_view") == null) return outcome("avatar_unavailable");
+        AccessibilityNodeInfo done = find(root, "next_button_textview");
+        if (done == null || !press(automation, done)) return outcome("avatar_unavailable");
+        for (int attempt = 0; attempt < 40; attempt++) {
+            SystemClock.sleep(250);
+            if (find(threadsRoot(automation), "profile_editor_card_done_button") != null) return outcome("avatar_confirmed");
         }
         return outcome("avatar_unavailable");
     }

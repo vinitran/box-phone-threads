@@ -308,6 +308,7 @@ struct DevicesView: View {
                                    openProfile: {
                                        Task { if await manager.openThreads(device) { profileDevice = device } }
                                    },
+                                   autoProfile: { Task { await manager.autoUpdateProfile(device) } },
                                    openManual: {
                                        Task { if await manager.openThreads(device) { threadsDevice = device } }
                                    })
@@ -390,6 +391,7 @@ private struct DeviceCard: View {
     let showInfo: () -> Void
     let showProxy: () -> Void
     let openProfile: () -> Void
+    let autoProfile: () -> Void
     let openManual: () -> Void
 
     private var isRunning: Bool { manager.runningThreads.contains(device.id) }
@@ -416,12 +418,18 @@ private struct DeviceCard: View {
             proxyRow
             Divider()
             actions
-            Button(action: openProfile) {
-                Label("Ảnh đại diện & Bio", systemImage: "person.crop.circle")
-                    .frame(maxWidth: .infinity)
+            let updatingProfile = manager.updatingProfile.contains(device.id)
+            Button(action: autoProfile) {
+                HStack(spacing: 6) {
+                    if updatingProfile { ProgressView().controlSize(.small) }
+                    Label(updatingProfile ? "Đang đổi ảnh đại diện & bio…" : "Đổi ảnh đại diện & Bio",
+                          systemImage: "person.crop.circle")
+                }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .disabled(!canUse || isRunning)
+            .disabled(!canUse || isRunning || updatingProfile || manager.installingAPK.contains(device.id))
+            .help("Tự động: AI tạo bio, chọn ngẫu nhiên một ảnh trong thư mục ảnh đại diện, rồi lưu cả hai trong Threads.")
         }
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor),
@@ -602,13 +610,14 @@ private struct DeviceCard: View {
                 Divider()
                 Button("Cài Threads & Instagram") { Task { await manager.installBundledApps(device) } }
                 Button("Cài APK…", action: chooseAPK)
+                Button("Ảnh đại diện & Bio thủ công…", action: openProfile)
             } label: {
                 Image(systemName: "ellipsis")
             }
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("Tùy chọn Threads")
-            .disabled(!canUse || isRunning || manager.installingAPK.contains(device.id))
+            .disabled(!canUse || isRunning || manager.installingAPK.contains(device.id) || manager.updatingProfile.contains(device.id))
 
             Spacer(minLength: 8)
 

@@ -62,7 +62,9 @@ Mở menu **⋯** trên thẻ máy và chọn **Cài APK…**, rồi chọn file
 
 ## Threads
 
-Bấm **Ảnh đại diện & Bio** trên thẻ thiết bị để chỉnh hồ sơ. Nhập bio mới rồi bấm **Cập nhật bio**. Phần avatar mặc định lấy ảnh từ `~/Downloads/avatar`, hiển thị ảnh xem trước và số ảnh hợp lệ. Bấm **Chọn ngẫu nhiên** để chọn ảnh khác (không lặp ngay ảnh đang xem nếu có nhiều ảnh), hoặc **Chọn thư mục…** để đổi nguồn; thư mục được lưu cho lần mở sau. Bấm **Đổi ảnh đại diện** để chuyển đúng ảnh đang xem sang điện thoại và chọn sẵn trong Threads; căn chỉnh, bấm **Done/Xong** rồi lưu hồ sơ trên điện thoại. Nút bị khóa khi thiết bị ngoại tuyến hoặc đang chạy chu kỳ tự động.
+Bấm **Đổi ảnh đại diện & Bio** trên thẻ thiết bị để đổi hồ sơ tự động, không cần xác nhận: AI tạo một câu bio, Phone Farm chọn ngẫu nhiên một ảnh trong thư mục ảnh đại diện (mặc định `~/Downloads/avatar`), chuyển sang điện thoại, chọn ảnh trong Threads, bấm Done ở khung cắt ảnh, rồi lưu bio và ảnh trong cùng một lần lưu Edit profile và kiểm tra bio trên trang hồ sơ. Thẻ thiết bị hiển thị từng bước; lỗi hiện thông báo. Nút bị khóa khi thiết bị ngoại tuyến, đang chạy chu kỳ tự động hoặc đang cài app.
+
+Muốn tự nhập bio, xem trước hoặc đổi thư mục ảnh, chọn **⋯ → Ảnh đại diện & Bio thủ công…**: nhập bio rồi bấm **Cập nhật bio**; **Chọn ngẫu nhiên** để chọn ảnh khác, **Chọn thư mục…** để đổi nguồn (được lưu cho lần sau); **Đổi ảnh đại diện** chọn sẵn ảnh trong Threads để bạn căn chỉnh, bấm Done/Xong và lưu trên điện thoại.
 
 Bấm **Chạy Threads** để bắt đầu chu kỳ tự động trên từng điện thoại. Mỗi lượt đọc ngẫu nhiên 5–10 bài gốc, bỏ các khối trả lời thụt vào và có nhãn trả lời trong feed, AI chọn một bài gần các chủ đề đã lưu nhất để bình luận và một bài khác để thả tim. AI chỉ chọn bài và soạn nội dung; mở app, chờ feed, vuốt, tìm đúng bài, thả tim, gõ Telex, chọn ảnh và đăng đều chạy bằng code.
 

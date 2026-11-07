@@ -11,6 +11,7 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var stopping: Set<String> = []
     @Published private(set) var runningThreads: Set<String> = []
     @Published private(set) var installingAPK: Set<String> = []
+    @Published private(set) var updatingProfile: Set<String> = []
     /// Threads/Instagram missing on each connected phone, checked once per connection.
     @Published private(set) var missingApps: [String: [AppBundles.App]] = [:]
     private var appsChecked: Set<String> = []
@@ -287,6 +288,28 @@ final class DeviceManager: ObservableObject {
             actionError = ActionError(title: "Không thể cài Threads & Instagram lên \(device.name)", details: error.localizedDescription)
         }
         await refreshInstalledApps(device)
+    }
+
+    /// One click: AI bio plus a random avatar, saved in Threads without further confirmation.
+    func autoUpdateProfile(_ device: AndroidDevice) async {
+        guard device.isReady, adbError == nil, !runningThreads.contains(device.id),
+              updatingProfile.insert(device.id).inserted else { return }
+        defer { updatingProfile.remove(device.id) }
+        guard let key = ThreadsKey.load() else {
+            actionError = ActionError(title: "Không thể đổi hồ sơ trên \(device.name)", details: "Chưa có khóa AI.")
+            return
+        }
+        reportActivity(device, progress: DeviceProgress(message: "Đang mở Threads để đổi ảnh đại diện và bio…"))
+        do {
+            let adb = try await launchThreads(device)
+            let summary = try await ProfileAutomation.run(adb: adb, serial: device.serial, key: key) { message in
+                self.reportActivity(device, progress: DeviceProgress(message: message))
+            }
+            reportActivity(device, progress: DeviceProgress(message: summary))
+        } catch {
+            reportActivity(device, progress: DeviceProgress(message: "Chưa đổi được hồ sơ: " + error.localizedDescription), hasIssue: true)
+            actionError = ActionError(title: "Không thể đổi ảnh đại diện và bio trên \(device.name)", details: error.localizedDescription)
+        }
     }
 
     func installAPK(_ device: AndroidDevice, files: [URL]) async {
