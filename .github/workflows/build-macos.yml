@@ -1,0 +1,78 @@
+name: Build macOS app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write # create a GitHub Release when a v* tag is pushed
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Ensure Android SDK platform and build tools
+        run: |
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -n "$sdk" || { echo "::error::ANDROID_HOME is not set on this runner"; exit 1; }
+          if ! ls "$sdk"/platforms/android-*/android.jar >/dev/null 2>&1 \
+             || ! ls "$sdk"/build-tools/*/d8 >/dev/null 2>&1; then
+            yes | "$sdk/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" >/dev/null
+          fi
+          swift --version
+          java -version
+          ls "$sdk/platforms" "$sdk/build-tools"
+
+      - name: Build Phone Farm.app (universal)
+        env:
+          PHONE_FARM_UNIVERSAL: "1"
+        run: ./scripts/build-app.sh
+
+      - name: Verify bundle
+        run: |
+          app=".build/Phone Farm.app"
+          lipo -info "$app/Contents/MacOS/PhoneFarm"
+          test -f "$app/Contents/Resources/KeyboardReader.dex"
+          test -f "$app/Contents/Resources/ai-key.enc.json"
+          codesign --verify --deep --strict "$app"
+
+      - name: Package
+        id: package
+        run: |
+          version="${GITHUB_REF_NAME//\//-}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || version="${GITHUB_SHA::7}"
+          zip="PhoneFarm-macOS-$version.zip"
+          ditto -c -k --keepParent ".build/Phone Farm.app" "$zip"
+          shasum -a 256 "$zip" | tee "$zip.sha256"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneFarm-macOS
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.zip }}.sha256
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.package.outputs.zip }}" "${{ steps.package.outputs.zip }}.sha256" \
+            --title "Phone Farm $GITHUB_REF_NAME" --generate-notes

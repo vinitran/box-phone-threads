@@ -20,6 +20,23 @@ open ".build/Phone Farm.app"
 
 App tìm ADB trong `PATH`, các thư mục Homebrew và MacPorts phổ biến, hoặc Android SDK ở `~/Library/Android/sdk`, `ANDROID_HOME` hay `ANDROID_SDK_ROOT`. Có thể chỉ định đường dẫn tuyệt đối bằng biến môi trường `ADB` hoặc `SCRCPY` khi chạy app từ terminal. App chuyển đường dẫn ADB đã chọn cho scrcpy để cả hai dùng cùng một bản ADB.
 
+## Tải bản build từ GitHub
+
+GitHub Actions (`.github/workflows/build-macos.yml`) build app universal cho Apple Silicon và Intel mỗi khi push lên `main` hoặc mở pull request. File `PhoneFarm-macOS-<commit>.zip` nằm trong mục **Artifacts** của lần chạy ở tab **Actions**. Để phát hành, đẩy tag dạng `v*`:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Workflow tạo GitHub Release kèm file zip và mã SHA-256. Bản CI được ký ad hoc, chưa notarize, nên sau khi giải nén cần bỏ cờ cách ly của macOS trước khi mở lần đầu:
+
+```sh
+xattr -dr com.apple.quarantine "Phone Farm.app"
+```
+
+App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng dẫn ở trên.
+
 ## Sử dụng
 
 1. Bật **USB debugging** trên điện thoại, kết nối USB và chấp nhận yêu cầu cấp quyền trên điện thoại. Thiết bị Wi-Fi sẽ xuất hiện nếu đã kết nối với ADB. [Hướng dẫn kết nối](https://github.com/Genymobile/scrcpy/blob/master/doc/connection.md)

@@ -2,8 +2,13 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-swift build -c release
-binary_dir="$(swift build -c release --show-bin-path)"
+# PHONE_FARM_UNIVERSAL=1 builds one binary for both Apple Silicon and Intel Macs (used by CI).
+build_args=(-c release)
+if [[ "${PHONE_FARM_UNIVERSAL:-}" == "1" ]]; then
+    build_args+=(--arch arm64 --arch x86_64)
+fi
+swift build "${build_args[@]}"
+binary_dir="$(swift build "${build_args[@]}" --show-bin-path)"
 
 app="$PWD/.build/Phone Farm.app"
 reader_dir="$PWD/.build/keyboard-reader"
