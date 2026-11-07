@@ -445,6 +445,11 @@ private struct DeviceCard: View {
     let autoProfile: () -> Void
     let runThreads: () -> Void
     let openManual: () -> Void
+    @State private var editingIdentity = false
+    @State private var nameDraft = ""
+    @State private var numberDraft = ""
+    @State private var identityError: String?
+    @State private var savingIdentity = false
 
     private var isRunning: Bool { manager.runningThreads.contains(device.id) }
     private var activity: DeviceManager.Activity? { manager.activities[device.id] }
@@ -495,23 +500,41 @@ private struct DeviceCard: View {
     }
 
     private var titleRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "iphone")
-                .font(.title3)
-                .foregroundStyle(tone.color)
-                .frame(width: 34, height: 34)
-                .background(tone.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(manager.displayName(device)).font(.headline).lineLimit(1)
-                Text(subtitle)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        let number = manager.identities[device.id]?.number
+        return HStack(alignment: .center, spacing: 10) {
+            Group {
+                if let number {
+                    Text(number < 100 ? String(format: "%02d", number) : String(number))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .minimumScaleFactor(0.6)
+                } else {
+                    Image(systemName: "iphone").font(.title3)
+                }
             }
-            .textSelection(.enabled)
+            .foregroundStyle(tone.color)
+            .frame(width: 34, height: 34)
+            .background(tone.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .help(number.map { "Số máy \($0)" } ?? "Chưa đặt số máy")
+            .accessibilityLabel(number.map { "Số máy \($0)" } ?? "Chưa đặt số máy")
+
+            Button(action: openIdentityEditor) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(manager.displayName(device)).font(.headline).lineLimit(1)
+                        Image(systemName: "pencil").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text(subtitle)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Bấm để đặt tên và số máy (lưu trên điện thoại)")
+            .popover(isPresented: $editingIdentity, arrowEdge: .bottom) { identityEditor }
 
             Spacer(minLength: 6)
 
@@ -641,14 +664,66 @@ private struct DeviceCard: View {
         Task { await manager.installAPK(device, files: files) }
     }
 
-    /// Number from the phone's identity file, then the model when a custom name is shown, then the serial.
+    /// Model (when a custom name is the title) and serial; the number is shown in the badge.
     private var subtitle: String {
         let identity = manager.identities[device.id]
+        if identity?.name == nil, identity?.number == nil { return "Chưa đặt tên, số máy · " + device.serial }
         var parts: [String] = []
-        if let number = identity?.number { parts.append("Số \(number)") }
         if manager.displayName(device) != device.name, device.name != device.serial { parts.append(device.name) }
-        parts.append(device.name == device.serial && parts.isEmpty ? "Chưa rõ model" : device.serial)
+        parts.append(device.serial)
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: Name and number
+
+    private func openIdentityEditor() {
+        let identity = manager.identities[device.id]
+        nameDraft = identity?.name ?? ""
+        numberDraft = identity?.number.map(String.init) ?? ""
+        identityError = nil
+        editingIdentity = true
+    }
+
+    private var identityEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tên và số máy").font(.headline)
+            TextField("Tên máy, ví dụ Máy 01", text: $nameDraft)
+            TextField("Số máy", text: $numberDraft)
+            Text("Lưu tại \(DeviceIdentity.path) trên điện thoại, cắm sang Mac khác vẫn giữ.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let identityError {
+                Text(identityError).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Hủy") { editingIdentity = false }
+                Button(savingIdentity ? "Đang lưu…" : "Lưu") { Task { await saveIdentity() } }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(savingIdentity || !device.isReady)
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .padding(16)
+        .frame(width: 300)
+    }
+
+    private func saveIdentity() async {
+        let number = numberDraft.trimmingCharacters(in: .whitespaces)
+        guard number.isEmpty || Int(number) != nil else {
+            identityError = "Số máy phải là số nguyên."
+            return
+        }
+        savingIdentity = true
+        defer { savingIdentity = false }
+        do {
+            try await manager.saveIdentity(device, name: nameDraft, number: Int(number))
+            editingIdentity = false
+        } catch {
+            identityError = error.localizedDescription
+        }
     }
 
     /// Opens or closes this phone's screen (scrcpy). Screens open only on request.

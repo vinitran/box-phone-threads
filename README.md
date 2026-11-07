@@ -100,7 +100,7 @@ Script build ký app bằng chứng chỉ **Apple Development** nếu có, hoặ
 
 ## File nhận diện trên điện thoại
 
-Mỗi điện thoại có thể lưu file `/sdcard/PhoneFarm/device.json` gồm **tên**, **số máy** và **proxy** của máy. Phone Farm đọc file khi máy kết nối: thẻ máy hiển thị tên và số máy, danh sách xếp theo số máy, ô tìm kiếm tìm được theo tên. Sửa tên và số máy trong **Thông tin → Nhận diện lưu trên điện thoại → Lưu vào điện thoại**. Khi **Áp dụng** proxy thành công, proxy (cả tài khoản và mật khẩu) được ghi vào file; **Gỡ proxy** xóa nó khỏi file.
+Mỗi điện thoại có thể lưu file `/sdcard/PhoneFarm/device.json` gồm **tên**, **số máy** và **proxy** của máy. Phone Farm đọc file khi máy kết nối: thẻ máy hiển thị tên và số máy, danh sách xếp theo số máy, ô tìm kiếm tìm được theo tên. Số máy hiển thị trong ô đầu thẻ, tên máy là tiêu đề thẻ. Bấm vào tên máy trên thẻ để sửa tên và số máy rồi **Lưu** (cũng sửa được trong **Thông tin → Nhận diện lưu trên điện thoại**). Khi **Áp dụng** proxy thành công, proxy (cả tài khoản và mật khẩu) được ghi vào file; **Gỡ proxy** xóa nó khỏi file.
 
 Vì file nằm trên chính điện thoại, cắm sang Mac khác vẫn nhận ra máy: nếu file có proxy, Phone Farm dùng proxy đó trước proxy lưu trên Mac (hiển thị trên thẻ, điền sẵn trong cửa sổ Proxy, dùng cho cảnh báo chưa gắn proxy). Mật khẩu proxy trong file ở dạng chữ thường, ai đọc được bộ nhớ điện thoại đều xem được.
 
