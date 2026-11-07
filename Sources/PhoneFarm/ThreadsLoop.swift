@@ -4,6 +4,8 @@ import Foundation
 enum ThreadsLoop {
     nonisolated static let batchSize = 10
     nonisolated static let restSeconds = (20 * 60)...(30 * 60)
+    /// After the 10th comment of a cycle, Threads is closed and the phone rests this long.
+    nonisolated static let cycleRestSeconds = 3 * 60 * 60
 
     struct Round {
         let submitted: Bool
@@ -16,6 +18,7 @@ enum ThreadsLoop {
         case submitted(cycle: Int, count: Int)
         case keepingOpen(cycle: Int, submitted: Int, until: Date)
         case resting(cycle: Int, submitted: Int, until: Date)
+        case cycleResting(cycle: Int, until: Date)
     }
 
     struct LoopError: LocalizedError {
@@ -27,6 +30,7 @@ enum ThreadsLoop {
         closeThreads: () async throws -> Void,
         event: (Event) -> Void,
         restRange: ClosedRange<Int> = restSeconds,
+        cycleRest: Int = cycleRestSeconds,
         rest: (() -> Int)? = nil,
         now: () -> Date = Date.init,
         sleep: (Int) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
@@ -52,11 +56,17 @@ enum ThreadsLoop {
                 try await sleep(60)
                 try Task.checkCancellation()
                 try await closeThreads()
-                let seconds = rest?() ?? Int.random(in: restRange)
-                guard restRange.contains(seconds) else {
-                    throw LoopError(errorDescription: "Khoảng nghỉ không đúng chế độ đã chọn.")
+                let seconds: Int
+                if count == batchSize {
+                    seconds = cycleRest
+                    event(.cycleResting(cycle: cycle, until: now().addingTimeInterval(TimeInterval(seconds))))
+                } else {
+                    seconds = rest?() ?? Int.random(in: restRange)
+                    guard restRange.contains(seconds) else {
+                        throw LoopError(errorDescription: "Khoảng nghỉ không đúng chế độ đã chọn.")
+                    }
+                    event(.resting(cycle: cycle, submitted: count, until: now().addingTimeInterval(TimeInterval(seconds))))
                 }
-                event(.resting(cycle: cycle, submitted: count, until: now().addingTimeInterval(TimeInterval(seconds))))
                 try await sleep(seconds)
                 try Task.checkCancellation()
             }

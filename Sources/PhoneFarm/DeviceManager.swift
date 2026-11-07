@@ -263,6 +263,9 @@ final class DeviceManager: ObservableObject {
                 case let .resting(cycle, count, until):
                     self.nextThreadsRun[device.id] = until
                     self.updateThreadsActivity(device, progress: DeviceProgress(message: "\(environment.title) · Chu kỳ \(cycle) · Đã bấm Đăng \(count)/10 · Đã tắt Threads · nghỉ \(environment.restLabel)"))
+                case let .cycleResting(cycle, until):
+                    self.nextThreadsRun[device.id] = until
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · Đã bấm Đăng 10/10 · Đã tắt Threads · nghỉ 3 giờ trước chu kỳ \(cycle + 1)"))
                 }
             }, restRange: environment.restRange)
         } catch {
