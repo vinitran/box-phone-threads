@@ -48,6 +48,10 @@ App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng d
 3. Mỗi máy ở trạng thái **Sẵn sàng** tự mở cửa sổ scrcpy, cả lúc mở app lẫn khi cắm thêm máy. Cửa sổ hiển thị model và serial để phân biệt các máy cùng model. Phiên mở từ app tắt âm thanh.
 4. Đóng trực tiếp cửa sổ scrcpy để kết thúc phiên. Máy đã đóng không tự mở lại cho đến khi ngắt rồi kết nối lại.
 
+## Cài APK lên điện thoại
+
+Mở menu **⋯** trên thẻ máy và chọn **Cài APK…**, rồi chọn file trên Mac. Có thể chọn một file `.apk`, nhiều file APK của cùng một app (split APK, ví dụ `base.apk` và các `split_config.*.apk`), hoặc file gói `.apks`/`.xapk`. Phone Farm cài bằng `adb install -r` (hoặc `install-multiple -r`), giữ dữ liệu app nếu máy đã có app. Sau khi cài, thẻ máy hiển thị kết quả và phiên bản Threads trên máy. Nếu máy đang có bản mới hơn hoặc app được ký bằng chữ ký khác, cần gỡ app cũ trước.
+
 ## Threads
 
 Bấm **Ảnh đại diện & Bio** trên thẻ thiết bị để mở Threads và chỉnh hồ sơ. Nhập bio mới rồi bấm **Cập nhật bio**; bấm **Đổi ảnh đại diện** để mở thư viện trên điện thoại, chọn ảnh và lưu trong Threads. Nút bị khóa khi thiết bị ngoại tuyến hoặc đang chạy chu kỳ tự động.

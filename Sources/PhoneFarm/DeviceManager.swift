@@ -10,6 +10,7 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var sessions: [String: RunningCommand] = [:]
     @Published private(set) var stopping: Set<String> = []
     @Published private(set) var runningThreads: Set<String> = []
+    @Published private(set) var installingAPK: Set<String> = []
     @Published private(set) var nextThreadsRun: [String: Date] = [:]
     @Published private(set) var activities: [String: Activity] = [:]
     @Published private(set) var storageError: String?
@@ -188,6 +189,26 @@ final class DeviceManager: ObservableObject {
             updateThreadsActivity(device, progress: DeviceProgress(message: error.localizedDescription), hasIssue: true)
             actionError = ActionError(title: "Không thể mở Threads trên \(device.name)", details: error.localizedDescription)
             return false
+        }
+    }
+
+    func installAPK(_ device: AndroidDevice, files: [URL]) async {
+        guard device.isReady, adbError == nil, !files.isEmpty, !runningThreads.contains(device.id),
+              installingAPK.insert(device.id).inserted else { return }
+        defer { installingAPK.remove(device.id) }
+        guard let adb = ToolPaths.adb() else {
+            actionError = ActionError(title: "Không thể cài APK lên \(device.name)", details: "Không tìm thấy ADB.")
+            return
+        }
+        let name = files.count == 1 ? files[0].lastPathComponent : "\(files.count) file"
+        reportActivity(device, progress: DeviceProgress(message: "Đang cài \(name)…"))
+        do {
+            let installed = try await APKInstaller.install(files, adb: adb, serial: device.serial)
+            let threads = await APKInstaller.installedVersion(of: "com.instagram.barcelona", adb: adb, serial: device.serial)
+            reportActivity(device, progress: DeviceProgress(message: "Đã cài \(installed)" + (threads.map { " · Threads \($0)" } ?? "")))
+        } catch {
+            reportActivity(device, progress: DeviceProgress(message: "Chưa cài được APK: \(error.localizedDescription)"), hasIssue: true)
+            actionError = ActionError(title: "Không thể cài APK lên \(device.name)", details: error.localizedDescription)
         }
     }
 

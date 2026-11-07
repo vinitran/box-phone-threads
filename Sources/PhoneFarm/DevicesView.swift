@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Main window: an adaptive grid of device cards, so a farm of many phones fits on one screen
 /// and the column count follows the window width.
@@ -516,6 +517,20 @@ private struct DeviceCard: View {
         .font(.caption)
     }
 
+    /// Picks one APK, several split APKs or an .apks/.xapk bundle and installs it on this phone.
+    private func chooseAPK() {
+        let panel = NSOpenPanel()
+        panel.title = "Chọn APK để cài lên \(device.name)"
+        panel.prompt = "Cài"
+        panel.message = "Chọn một file .apk, nhiều file APK của cùng một app (split APK), hoặc file .apks/.xapk."
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = APKInstaller.extensions.compactMap { UTType(filenameExtension: $0) }
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let files = panel.urls
+        Task { await manager.installAPK(device, files: files) }
+    }
+
     private var actions: some View {
         HStack(spacing: 8) {
             Button(action: showInfo) {
@@ -529,13 +544,14 @@ private struct DeviceCard: View {
 
             Menu {
                 Button("Điều khiển thủ công", action: openManual)
+                Button("Cài APK…", action: chooseAPK)
             } label: {
                 Image(systemName: "ellipsis")
             }
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("Tùy chọn Threads")
-            .disabled(!canUse || isRunning)
+            .disabled(!canUse || isRunning || manager.installingAPK.contains(device.id))
 
             Spacer(minLength: 8)
 
