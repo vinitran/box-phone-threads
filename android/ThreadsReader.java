@@ -530,6 +530,26 @@ public final class ThreadsReader {
         return outcome("avatar_unavailable");
     }
 
+    /**
+     * Presses Done in Edit profile and waits until Threads leaves the editor with the new bio on the profile.
+     * Saving a new picture uploads it first and can take well over ten seconds, and a Done tap made while
+     * the editor is still settling may be ignored, so Done is pressed again (at most three times).
+     */
+    private static JSONObject saveEditedProfile(UiAutomation automation, String bio) throws JSONException {
+        SystemClock.sleep(800);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            AccessibilityNodeInfo done = find(threadsRoot(automation), "profile_editor_card_done_button");
+            if (done != null && !press(automation, done)) return outcome("bio_unavailable");
+            for (int check = 0; check < 50; check++) {
+                SystemClock.sleep(300);
+                AccessibilityNodeInfo root = threadsRoot(automation);
+                if (find(root, "profile_editor_card_done_button") != null) continue;
+                if (findLabel(find(root, "ProfileScreen"), bio) != null) return outcome("bio_saved");
+            }
+        }
+        return outcome("bio_unverified");
+    }
+
     private static JSONObject saveBio(UiAutomation automation, String bio) throws JSONException {
         AccessibilityNodeInfo root = threadsRoot(automation);
         AccessibilityNodeInfo label = findLabel(root, "Bio", "Tiểu sử");
@@ -557,14 +577,8 @@ public final class ThreadsReader {
             if (editor == null || !bio.equals(string(editor.getText())) || next == null
                     || !press(automation, next)) return outcome("bio_unavailable");
             AccessibilityNodeInfo done = waitFor(automation, "profile_editor_card_done_button");
-            if (done == null || findLabel(threadsRoot(automation), bio) == null
-                    || !press(automation, done)) return outcome("bio_unavailable");
-            for (int check = 0; check < 40; check++) {
-                SystemClock.sleep(300);
-                AccessibilityNodeInfo profile = find(threadsRoot(automation), "ProfileScreen");
-                if (findLabel(profile, bio) != null) return outcome("bio_saved");
-            }
-            return outcome("bio_unverified");
+            if (done == null || findLabel(threadsRoot(automation), bio) == null) return outcome("bio_unavailable");
+            return saveEditedProfile(automation, bio);
         }
         return outcome("bio_unavailable");
     }

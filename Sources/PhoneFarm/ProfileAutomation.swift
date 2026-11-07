@@ -43,8 +43,9 @@ enum ProfileAutomation {
         try await expect(["avatar_confirmed"], Request(action: "confirm_avatar"), adb: adb, serial: serial, timeout: 20)
 
         progress("Đang lưu bio và ảnh đại diện…")
+        // Saving uploads the new picture; the helper may press Done up to three times and wait ~15 s each.
         let saved = try await expect(["bio_saved", "bio_unverified"], Request(action: "bio", bio: bio),
-                                     adb: adb, serial: serial, timeout: 30)
+                                     adb: adb, serial: serial, timeout: 75)
         let suffix = saved == "bio_saved" ? "" : " (chưa thấy bio trên hồ sơ, hãy kiểm tra)"
         return "Đã đổi ảnh \(image.lastPathComponent) và bio: \(bio)" + suffix
     }

@@ -297,7 +297,7 @@ struct ThreadsFeedSheet: View {
             }
             let payload = try JSONEncoder().encode(request)
             let output = try await AndroidAccessibility.read(adb: adb, serial: device.serial, entry: .threadsProfile,
-                                                             timeout: 22, payload: payload)
+                                                             timeout: 75, payload: payload)
             guard output.status == 0, let line = output.output.split(whereSeparator: \.isNewline).last else {
                 status = "Threads chưa xác nhận cập nhật hồ sơ."
                 return
