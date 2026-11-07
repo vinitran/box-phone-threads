@@ -144,9 +144,10 @@ enum ThreadsAttachments {
                 let parts = field.components(separatedBy: "=")
                 if parts.count == 2 { values[parts[0].components(separatedBy: " ").last!] = parts[1] }
             }
+            // Android 10 registers scanned files without width/height (NULL); only reject explicit bad sizes.
+            func sizeOK(_ value: String?) -> Bool { value == "NULL" || (Int(value ?? "") ?? 0) > 0 }
             if fields["is_pending"] == "0", let id = fields["_id"].flatMap(Int.init),
-               let name = fields["_display_name"], (Int(fields["width"] ?? "") ?? 0) > 0,
-               (Int(fields["height"] ?? "") ?? 0) > 0 { registered[name] = id }
+               let name = fields["_display_name"], sizeOK(fields["width"]), sizeOK(fields["height"]) { registered[name] = id }
         }
         return registered
     }
