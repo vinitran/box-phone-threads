@@ -191,51 +191,59 @@ struct DevicesView: View {
         }
     }
 
+    /// Running version (or the update button when GitHub has a newer release) plus a button to check again.
     @ViewBuilder
     private var updateControl: some View {
         let version = "v" + updater.currentVersion
-        switch updater.state {
-        case .available(let release):
-            Button {
-                pendingUpdate = release
-            } label: {
-                Label("Cập nhật v\(release.version)", systemImage: "arrow.down.circle.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .help("Đang dùng \(version). Có phiên bản v\(release.version) trên GitHub.")
-        case .installing(let message):
-            HStack(spacing: 6) {
+        HStack(spacing: 6) {
+            switch updater.state {
+            case .available(let release):
+                Button {
+                    pendingUpdate = release
+                } label: {
+                    Label("Cập nhật v\(release.version)", systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Đang dùng \(version). Bấm để tải và cài bản mới nhất trên GitHub.")
+            case .installing(let message):
                 ProgressView().controlSize(.small)
                 Text(message).font(.callout).foregroundStyle(.secondary)
-            }
-            .fixedSize()
-        case .checking:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("\(version) · Đang kiểm tra…").font(.callout).foregroundStyle(.secondary)
-            }
-            .fixedSize()
-        case .failed(let message):
-            Button {
-                Task { await updater.check() }
-            } label: {
+            case .checking:
+                Label(version, systemImage: "checkmark.seal").font(.callout).foregroundStyle(.secondary)
+            case .failed(let message):
                 Label(version, systemImage: "exclamationmark.triangle")
-            }
-            .foregroundStyle(.orange)
-            .help("Chưa kiểm tra được phiên bản mới: \(message) Bấm để thử lại.")
-        case .idle, .upToDate:
-            Button {
-                Task { await updater.check() }
-            } label: {
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .help("Chưa kiểm tra được phiên bản mới: \(message)")
+            case .idle, .upToDate:
                 Label(version, systemImage: "checkmark.seal")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .help(updater.state == .upToDate ? "Đang dùng bản mới nhất." : "Chưa kiểm tra phiên bản mới.")
             }
-            .help(updater.state == .upToDate ? "Đang dùng bản mới nhất. Bấm để kiểm tra lại." : "Bấm để kiểm tra phiên bản mới.")
+            if updater.state == .checking {
+                ProgressView().controlSize(.small).frame(width: 28)
+            } else if !isInstallingUpdate {
+                Button {
+                    Task { await updater.check() }
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .help("Kiểm tra lại phiên bản mới nhất trên GitHub")
+                .accessibilityLabel("Kiểm tra phiên bản mới")
+            }
         }
+        .fixedSize()
+    }
+
+    private var isInstallingUpdate: Bool {
+        if case .installing = updater.state { return true }
+        return false
     }
 
     private var updateMessage: String {
         let running = manager.runningThreads.count
-        var text = "Phone Farm sẽ tải bản mới từ GitHub, đóng app, thay bản cũ rồi tự mở lại. Bạn cần nhập lại mật khẩu."
+        var text = "Phone Farm sẽ tải bản mới nhất từ GitHub, đóng app, thay bản cũ rồi tự mở lại. Bạn cần nhập lại mật khẩu."
         if running > 0 {
             text += " Threads đang chạy trên \(running) máy sẽ bị dừng."
         }

@@ -105,7 +105,13 @@ final class AppUpdater: ObservableObject {
     func install(_ release: Release) async {
         guard !isBusy else { return }
         do {
-            let staged = try await stage(release, replacing: Bundle.main.bundleURL)
+            // Always install the newest release at the moment of the click, not the one found hours ago.
+            state = .installing("Đang kiểm tra bản mới nhất…")
+            var target = release
+            if let latest = try? await latestRelease(), Self.isVersion(latest.version, newerThan: target.version) {
+                target = latest
+            }
+            let staged = try await stage(target, replacing: Bundle.main.bundleURL)
             let helper = Process()
             helper.executableURL = URL(fileURLWithPath: "/bin/sh")
             helper.arguments = [staged.script.path, String(ProcessInfo.processInfo.processIdentifier),
