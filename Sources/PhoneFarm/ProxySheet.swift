@@ -4,17 +4,23 @@ struct ProxySheet: View {
     let device: AndroidDevice
     var onActivity: (String) -> Void = { _ in }
     var onSaved: () -> Void = {}
+    /// Proxy line from the phone's identity file; used before the Mac's saved proxy.
+    var phoneProxy: String? = nil
+    /// Called with the applied proxy line, or nil after removing it, to update the phone's file.
+    var onApplied: (String?) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var input = ""
     @State private var savedProxy: PhoneFarmStore.SavedProxy?
     @State private var isWorking = false
     @State private var status = ""
     @State private var error: String?
+    @State private var fromPhone = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Proxy · \(device.name)").font(.title2.weight(.semibold))
-            Text("host:port:user:pass hoặc host:port")
+            Text(fromPhone ? "host:port:user:pass hoặc host:port · đang hiển thị proxy lưu trên điện thoại"
+                           : "host:port:user:pass hoặc host:port")
                 .font(.callout).foregroundStyle(.secondary)
             SecureField("Nhập hoặc dán proxy", text: $input)
                 .textFieldStyle(.roundedBorder)
@@ -31,7 +37,7 @@ struct ProxySheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                if let savedProxy, savedProxy.mode != "off" {
+                if fromPhone || (savedProxy.map { $0.mode != "off" } ?? false) {
                     Button("Gỡ proxy", role: .destructive) { Task { await remove() } }
                 }
                 Spacer()
@@ -51,6 +57,11 @@ struct ProxySheet: View {
     private func loadSaved() {
         do {
             savedProxy = try PhoneFarmStore.shared.get().savedProxy(serial: device.serial)
+            if let phoneProxy = phoneProxy?.trimmingCharacters(in: .whitespacesAndNewlines), !phoneProxy.isEmpty {
+                input = phoneProxy
+                fromPhone = true
+                return
+            }
             guard let savedProxy, let endpoint = savedProxy.endpoint else { return }
             var value = endpoint.address
             if let reference = savedProxy.credentialID {
@@ -114,6 +125,7 @@ struct ProxySheet: View {
                 throw error
             }
             onSaved()
+            onApplied(input.trimmingCharacters(in: .whitespacesAndNewlines))
             if let oldDirectory = oldSaved?.relayDirectory, oldDirectory != created?.directory {
                 try? await relay.stop(directory: oldDirectory)
             }
@@ -153,6 +165,7 @@ struct ProxySheet: View {
                 try? await AndroidProxyRelay(adb: adb, serial: device.serial).stop(directory: directory)
             }
             onSaved()
+            onApplied(nil)
             report("Đã gỡ proxy")
             dismiss()
         } catch {

@@ -84,6 +84,8 @@ struct DevicesView: View {
             }, onSaved: {
                 do { try manager.reloadSavedProxies() }
                 catch { manager.actionError = .init(title: "Chưa đọc được proxy đã lưu", details: error.localizedDescription) }
+            }, phoneProxy: manager.identities[device.id]?.proxy, onApplied: { line in
+                Task { await manager.recordProxy(device, line: line) }
             })
         }
         .sheet(item: $threadsDevice) { device in
@@ -93,7 +95,7 @@ struct DevicesView: View {
             ThreadsFeedSheet(device: device, profileOnly: true) { manager.reportActivity(device, progress: DeviceProgress(message: $0)) }
         }
         .sheet(item: $infoDevice) { device in
-            DeviceInfoSheet(device: device)
+            DeviceInfoSheet(device: device, manager: manager)
         }
         .sheet(isPresented: $showThreadsSettings) { ThreadsSettingsSheet() }
     }
@@ -320,9 +322,14 @@ struct DevicesView: View {
             .filter {
                 query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
                     || $0.serial.localizedCaseInsensitiveContains(query)
+                    || manager.displayName($0).localizedCaseInsensitiveContains(query)
             }
-            // Connected phones first; serial keeps the order stable while statuses change.
-            .sorted { ($0.isReady ? 0 : 1, $0.serial) < ($1.isReady ? 0 : 1, $1.serial) }
+            // Connected phones first, then by the number in the phone's identity file; serial keeps the order stable.
+            .sorted { lhs, rhs in
+                let left = (lhs.isReady ? 0 : 1, manager.identities[lhs.id]?.number ?? Int.max, lhs.serial)
+                let right = (rhs.isReady ? 0 : 1, manager.identities[rhs.id]?.number ?? Int.max, rhs.serial)
+                return left < right
+            }
     }
 
     // MARK: Content
@@ -497,8 +504,8 @@ private struct DeviceCard: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(device.name).font(.headline).lineLimit(1)
-                Text(device.name == device.serial ? "Chưa rõ model" : device.serial)
+                Text(manager.displayName(device)).font(.headline).lineLimit(1)
+                Text(subtitle)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -578,7 +585,7 @@ private struct DeviceCard: View {
     private var proxyRow: some View {
         HStack(spacing: 10) {
             Label {
-                Text(manager.savedProxies[device.id]?.endpoint?.address ?? "Chưa cấu hình proxy")
+                Text(manager.proxyAddress(device) ?? "Chưa cấu hình proxy")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
@@ -632,6 +639,16 @@ private struct DeviceCard: View {
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         let files = panel.urls
         Task { await manager.installAPK(device, files: files) }
+    }
+
+    /// Number from the phone's identity file, then the model when a custom name is shown, then the serial.
+    private var subtitle: String {
+        let identity = manager.identities[device.id]
+        var parts: [String] = []
+        if let number = identity?.number { parts.append("Số \(number)") }
+        if manager.displayName(device) != device.name, device.name != device.serial { parts.append(device.name) }
+        parts.append(device.name == device.serial && parts.isEmpty ? "Chưa rõ model" : device.serial)
+        return parts.joined(separator: " · ")
     }
 
     /// Opens or closes this phone's screen (scrcpy). Screens open only on request.

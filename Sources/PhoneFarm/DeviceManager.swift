@@ -12,6 +12,9 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var runningThreads: Set<String> = []
     @Published private(set) var installingAPK: Set<String> = []
     @Published private(set) var updatingProfile: Set<String> = []
+    /// Identity files read from each phone (/sdcard/PhoneFarm/device.json), kept while offline.
+    @Published private(set) var identities: [String: DeviceIdentity] = [:]
+    private var identitiesChecked: Set<String> = []
     /// Threads/Instagram missing on each connected phone, checked once per connection.
     @Published private(set) var missingApps: [String: [AppBundles.App]] = [:]
     private var appsChecked: Set<String> = []
@@ -130,6 +133,7 @@ final class DeviceManager: ObservableObject {
                     storageError = nil
                     reloadCommentCounts()
                     checkInstalledApps()
+                    checkIdentities()
                 } catch {
                     devices = discovered
                     storageError = error.localizedDescription
@@ -162,8 +166,62 @@ final class DeviceManager: ObservableObject {
         }
     }
 
-    /// True when a proxy is saved for the phone (shown on its card).
-    func hasProxy(_ device: AndroidDevice) -> Bool { savedProxies[device.id]?.endpoint != nil }
+    /// True when the phone's identity file or the Mac's database has a proxy for it.
+    func hasProxy(_ device: AndroidDevice) -> Bool { proxyAddress(device) != nil }
+
+    /// The phone's own proxy comes first, so a phone keeps its proxy on another Mac.
+    func proxyAddress(_ device: AndroidDevice) -> String? {
+        identities[device.id]?.proxyAddress ?? savedProxies[device.id]?.endpoint?.address
+    }
+
+    // MARK: Identity file on the phone
+
+    func displayName(_ device: AndroidDevice) -> String {
+        let name = identities[device.id]?.name?.trimmingCharacters(in: .whitespaces)
+        return name?.isEmpty == false ? name! : device.name
+    }
+
+    private func checkIdentities() {
+        let ready = Set(devices.filter(\.isReady).map(\.id))
+        identitiesChecked.formIntersection(ready)
+        for device in devices where device.isReady && !identitiesChecked.contains(device.id) {
+            identitiesChecked.insert(device.id)
+            Task { await loadIdentity(device) }
+        }
+    }
+
+    func loadIdentity(_ device: AndroidDevice) async {
+        guard let adb = ToolPaths.adb() else { return }
+        if let identity = await DeviceIdentity.read(adb: adb, serial: device.serial) {
+            identities[device.id] = identity
+        } else {
+            identities.removeValue(forKey: device.id)
+        }
+    }
+
+    /// Writes name and number to the phone, keeping its proxy.
+    func saveIdentity(_ device: AndroidDevice, name: String, number: Int?) async throws {
+        guard let adb = ToolPaths.adb() else { throw DeviceIdentity.IdentityError("Không tìm thấy ADB.") }
+        var identity = await DeviceIdentity.read(adb: adb, serial: device.serial) ?? DeviceIdentity()
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        identity.name = trimmed.isEmpty ? nil : trimmed
+        identity.number = number
+        try await DeviceIdentity.write(identity, adb: adb, serial: device.serial)
+        await loadIdentity(device)
+    }
+
+    /// Records the proxy applied from the Proxy window (nil after removing it) in the phone's file.
+    func recordProxy(_ device: AndroidDevice, line: String?) async {
+        guard let adb = ToolPaths.adb() else { return }
+        var identity = await DeviceIdentity.read(adb: adb, serial: device.serial) ?? DeviceIdentity()
+        identity.proxy = line?.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try await DeviceIdentity.write(identity, adb: adb, serial: device.serial)
+            await loadIdentity(device)
+        } catch {
+            actionError = ActionError(title: "Chưa ghi được proxy vào \(device.name)", details: error.localizedDescription)
+        }
+    }
 
     func open(_ device: AndroidDevice) {
         guard device.isReady, adbError == nil, sessions[device.id] == nil else { return }

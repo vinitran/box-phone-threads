@@ -2,14 +2,20 @@ import SwiftUI
 
 struct DeviceInfoSheet: View {
     let device: AndroidDevice
+    @ObservedObject var manager: DeviceManager
     @Environment(\.dismiss) private var dismiss
     @State private var info: PhoneFarmStore.DeviceInfo?
     @State private var error: String?
+    @State private var name = ""
+    @State private var number = ""
+    @State private var identityStatus: String?
+    @State private var savingIdentity = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Thông tin · \(device.name)").font(.title2.weight(.semibold))
             Text(device.serial).font(.caption.monospaced()).textSelection(.enabled)
+            identityEditor
             if let info {
                 Text("Lần kết nối gần nhất · " + date(info.lastSeen)).foregroundStyle(.secondary)
                 if let proxy = info.proxy {
@@ -53,7 +59,47 @@ struct DeviceInfoSheet: View {
         }
         .padding(22)
         .frame(width: 560)
-        .task { load() }
+        .task {
+            load()
+            let identity = manager.identities[device.id]
+            name = identity?.name ?? ""
+            number = identity?.number.map(String.init) ?? ""
+        }
+    }
+
+    /// Name and number stored on the phone (/sdcard/PhoneFarm/device.json) so they follow it to other Macs.
+    private var identityEditor: some View {
+        GroupBox("Nhận diện lưu trên điện thoại") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    TextField("Tên máy, ví dụ Máy 01", text: $name)
+                    TextField("Số máy", text: $number).frame(width: 80)
+                    Button("Lưu vào điện thoại") { Task { await saveIdentity() } }
+                        .disabled(savingIdentity || !device.isReady)
+                }
+                .textFieldStyle(.roundedBorder)
+                Text("File \(DeviceIdentity.path) · Proxy trên máy: \(manager.identities[device.id]?.proxyAddress ?? "chưa có")")
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                if let identityStatus { Text(identityStatus).font(.caption) }
+            }
+            .padding(4)
+        }
+    }
+
+    private func saveIdentity() async {
+        let trimmedNumber = number.trimmingCharacters(in: .whitespaces)
+        guard trimmedNumber.isEmpty || Int(trimmedNumber) != nil else {
+            identityStatus = "Số máy phải là số nguyên."
+            return
+        }
+        savingIdentity = true
+        defer { savingIdentity = false }
+        do {
+            try await manager.saveIdentity(device, name: name, number: Int(trimmedNumber))
+            identityStatus = "Đã lưu vào điện thoại."
+        } catch {
+            identityStatus = error.localizedDescription
+        }
     }
 
     private func load() {
