@@ -702,7 +702,9 @@ public final class ThreadsReader {
 
     private static boolean press(UiAutomation automation, AccessibilityNodeInfo node) {
         if (cancelled()) return false;
-        if (click(node)) return true;
+        // Threads' Post buttons are not marked clickable; on Android 10 ACTION_CLICK on them reports
+        // success without posting. Tap the centre like a finger unless the node itself is clickable.
+        if (node.isClickable() && click(node)) return true;
         Rect rect = bounds(node);
         if (!node.isEnabled() || !node.isVisibleToUser() || rect.isEmpty()) return false;
         long time = SystemClock.uptimeMillis();
