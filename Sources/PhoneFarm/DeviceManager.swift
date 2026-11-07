@@ -488,6 +488,8 @@ final class DeviceManager: ObservableObject {
             throw ThreadsLaunchError(errorDescription: "Không tìm thấy ADB.")
         }
         let shell = ["-s", device.serial, "shell"]
+        // Close the notification shade if someone left it open; it covers Threads and the keyboard.
+        _ = await (try? RunningCommand(adb, arguments: shell + ["cmd", "statusbar", "collapse"]))?.result(timeout: 8)
         let package = "com.instagram.barcelona"
         let launcher = ["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER"]
         let lookup = try RunningCommand(adb, arguments: shell + [

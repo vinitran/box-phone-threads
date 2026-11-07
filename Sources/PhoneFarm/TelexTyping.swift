@@ -201,6 +201,9 @@ struct TelexTyping {
     }
 
     func prepare(for keys: [Character]) async throws -> KeyboardContext {
+        // A pulled-down notification shade covers the keyboard, so Android reports only part of its keys.
+        _ = try? await command(["shell", "cmd statusbar collapse"])
+        try await Task.sleep(for: .milliseconds(300))
         let context = try await keyboardContext()
         let ime = try await command(["shell", "settings", "get", "secure", "default_input_method"])
         guard ime.output.hasPrefix("com.google.android.inputmethod.latin/") else {
