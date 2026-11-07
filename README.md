@@ -45,8 +45,8 @@ App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng d
 
 1. Bật **USB debugging** trên điện thoại, kết nối USB và chấp nhận yêu cầu cấp quyền trên điện thoại. Thiết bị Wi-Fi sẽ xuất hiện nếu đã kết nối với ADB. [Hướng dẫn kết nối](https://github.com/Genymobile/scrcpy/blob/master/doc/connection.md)
 2. Mỗi máy hiển thị thành một thẻ; số cột tự đổi theo độ rộng cửa sổ. Dùng bộ lọc **Tất cả / Đang chạy / Sẵn sàng / Cần chú ý** (kèm số lượng) hoặc ô tìm theo tên, serial khi có nhiều máy. Danh sách tự cập nhật khoảng 3 giây một lần. Có thể bấm **Làm mới** hoặc **⌘R** để cập nhật ngay.
-3. Mỗi máy ở trạng thái **Sẵn sàng** tự mở cửa sổ scrcpy, cả lúc mở app lẫn khi cắm thêm máy. Cửa sổ hiển thị model và serial để phân biệt các máy cùng model. Phiên mở từ app tắt âm thanh.
-4. Đóng trực tiếp cửa sổ scrcpy để kết thúc phiên. Máy đã đóng không tự mở lại cho đến khi ngắt rồi kết nối lại.
+3. Bấm biểu tượng màn hình trên dòng tên của thẻ máy để mở cửa sổ scrcpy; màn hình chỉ mở khi bạn bấm. Biểu tượng chuyển màu khi đang mở. Cửa sổ hiển thị model và serial để phân biệt các máy cùng model. Phiên mở từ app tắt âm thanh.
+4. Bấm lại biểu tượng màn hình hoặc đóng trực tiếp cửa sổ scrcpy để kết thúc phiên.
 
 ## Cài Threads và Instagram cho máy mới
 
@@ -67,6 +67,8 @@ Bấm **Đổi ảnh đại diện & Bio** trên thẻ thiết bị để đổi
 Muốn tự nhập bio, xem trước hoặc đổi thư mục ảnh, chọn **⋯ → Ảnh đại diện & Bio thủ công…**: nhập bio rồi bấm **Cập nhật bio**; **Chọn ngẫu nhiên** để chọn ảnh khác, **Chọn thư mục…** để đổi nguồn (được lưu cho lần sau); **Đổi ảnh đại diện** chọn sẵn ảnh trong Threads để bạn căn chỉnh, bấm Done/Xong và lưu trên điện thoại.
 
 Bấm **Chạy Threads** để bắt đầu chu kỳ tự động trên từng điện thoại. Mỗi lượt đọc ngẫu nhiên 5–10 bài gốc, bỏ các khối trả lời thụt vào và có nhãn trả lời trong feed, AI chọn một bài gần các chủ đề đã lưu nhất để bình luận và một bài khác để thả tim. AI chỉ chọn bài và soạn nội dung; mở app, chờ feed, vuốt, tìm đúng bài, thả tim, gõ Telex, chọn ảnh và đăng đều chạy bằng code.
+
+Nếu máy chưa có proxy đã lưu, bấm **Chạy Threads** hoặc **Đổi ảnh đại diện & Bio** sẽ hiện cảnh báo: chọn **Vẫn chạy…**, **Gắn proxy…** (mở cửa sổ Proxy) hoặc **Hủy**.
 
 Bấm Đăng xong app tính một lượt gửi, không tìm bình luận để xác nhận trên server. **Sau mỗi lần bấm Đăng**, app trở về Trang chủ và làm mới, giữ Threads mở khoảng **60 giây** rồi tắt hẳn Threads bằng `am force-stop`, rồi nghỉ theo chế độ: **Dev 2 phút**, **Production ngẫu nhiên 20–30 phút**. Hết thời gian nghỉ, app mở lại Threads, chuẩn bị feed và tiếp tục lượt kế tiếp. Mỗi chu kỳ gồm 10 lần bấm Đăng. **Sau bình luận thứ 10**, app tắt hẳn Threads và nghỉ **3 giờ** (cả Dev lẫn Production) rồi mới bắt đầu chu kỳ mới với bộ đếm về 0. Phone Farm phải tiếp tục chạy trên Mac. Khi chu kỳ đang chạy, nút đổi thành **Đóng**; bấm **Đóng** để hủy thao tác hoặc khoảng nghỉ, không chạy lượt tiếp theo. Lỗi ngăn bấm Đăng không được tính thêm và dừng chu kỳ để tránh gửi lại bản nháp chưa rõ trạng thái.
 

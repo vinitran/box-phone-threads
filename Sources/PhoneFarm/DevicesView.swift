@@ -7,6 +7,7 @@ struct DevicesView: View {
     @ObservedObject var manager: DeviceManager
     @ObservedObject var updater: AppUpdater
     @State private var pendingUpdate: AppUpdater.Release?
+    @State private var proxyWarning: ProxyWarning?
     @State private var reportsUpdateFailure = false
     @State private var proxyDevice: AndroidDevice?
     @State private var threadsDevice: AndroidDevice?
@@ -19,6 +20,15 @@ struct DevicesView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+                .alert(proxyWarning.map { "\($0.device.name) chưa gắn proxy" } ?? "",
+                       isPresented: Binding(get: { proxyWarning != nil }, set: { if !$0 { proxyWarning = nil } }),
+                       presenting: proxyWarning) { warning in
+                    Button(warning.action.continueTitle) { perform(warning.action, on: warning.device) }
+                    Button("Gắn proxy…") { proxyDevice = warning.device }
+                    Button("Hủy", role: .cancel) {}
+                } message: { warning in
+                    Text("\(warning.device.serial) chưa có proxy đã lưu. Threads trên máy này sẽ dùng IP mạng hiện tại của điện thoại.")
+                }
             Divider()
             if let adbError = manager.adbError {
                 banner("Không đọc được danh sách thiết bị", details: adbError)
@@ -86,6 +96,31 @@ struct DevicesView: View {
             DeviceInfoSheet(device: device)
         }
         .sheet(isPresented: $showThreadsSettings) { ThreadsSettingsSheet() }
+    }
+
+    // MARK: Proxy check
+
+    struct ProxyWarning: Identifiable {
+        enum Action {
+            case threads, profile
+            var continueTitle: String { self == .threads ? "Vẫn chạy Threads" : "Vẫn đổi ảnh đại diện & bio" }
+        }
+        let device: AndroidDevice
+        let action: Action
+        var id: String { device.id }
+    }
+
+    /// Runs the action right away when the phone has a saved proxy, otherwise asks first.
+    private func checkProxy(_ device: AndroidDevice, _ action: ProxyWarning.Action) {
+        if manager.hasProxy(device) { perform(action, on: device) }
+        else { proxyWarning = ProxyWarning(device: device, action: action) }
+    }
+
+    private func perform(_ action: ProxyWarning.Action, on device: AndroidDevice) {
+        switch action {
+        case .threads: manager.runThreads(device)
+        case .profile: Task { await manager.autoUpdateProfile(device) }
+        }
     }
 
     // MARK: Header
@@ -316,7 +351,8 @@ struct DevicesView: View {
                                    openProfile: {
                                        Task { if await manager.openThreads(device) { profileDevice = device } }
                                    },
-                                   autoProfile: { Task { await manager.autoUpdateProfile(device) } },
+                                   autoProfile: { checkProxy(device, .profile) },
+                                   runThreads: { checkProxy(device, .threads) },
                                    openManual: {
                                        Task { if await manager.openThreads(device) { threadsDevice = device } }
                                    })
@@ -400,6 +436,7 @@ private struct DeviceCard: View {
     let showProxy: () -> Void
     let openProfile: () -> Void
     let autoProfile: () -> Void
+    let runThreads: () -> Void
     let openManual: () -> Void
 
     private var isRunning: Bool { manager.runningThreads.contains(device.id) }
@@ -471,12 +508,7 @@ private struct DeviceCard: View {
 
             Spacer(minLength: 6)
 
-            if manager.sessions[device.id] != nil {
-                Image(systemName: "display")
-                    .foregroundStyle(.secondary)
-                    .help("Đang hiển thị màn hình bằng scrcpy")
-                    .accessibilityLabel("Đang hiển thị màn hình")
-            }
+            screenButton
 
             HStack(spacing: 5) {
                 Circle().fill(tone.color).frame(width: 7, height: 7)
@@ -602,6 +634,22 @@ private struct DeviceCard: View {
         Task { await manager.installAPK(device, files: files) }
     }
 
+    /// Opens or closes this phone's screen (scrcpy). Screens open only on request.
+    private var screenButton: some View {
+        let isOpen = manager.sessions[device.id] != nil
+        let isClosing = manager.stopping.contains(device.id)
+        return Button {
+            if isOpen { manager.close(device) } else { manager.open(device) }
+        } label: {
+            Image(systemName: "display")
+                .foregroundStyle(isOpen ? Color.accentColor : Color.secondary)
+        }
+        .buttonStyle(.borderless)
+        .disabled(isClosing || (!isOpen && (!canUse || !manager.scrcpyAvailable)))
+        .help(isOpen ? "Đóng màn hình điện thoại" : "Mở màn hình điện thoại (scrcpy)")
+        .accessibilityLabel(isOpen ? "Đóng màn hình" : "Mở màn hình")
+    }
+
     private var actions: some View {
         HStack(spacing: 8) {
             Button(action: showInfo) {
@@ -646,9 +694,7 @@ private struct DeviceCard: View {
             }
             .tint(.red)
         } else {
-            Button {
-                manager.runThreads(device)
-            } label: {
+            Button(action: runThreads) {
                 Label("Chạy Threads", systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)

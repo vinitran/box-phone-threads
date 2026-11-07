@@ -34,9 +34,6 @@ final class DeviceManager: ObservableObject {
     private let storage: PhoneFarmStore?
     private var threadsTasks: [String: Task<Void, Never>] = [:]
     private var photoCleanupTasks: [String: Task<Void, Never>] = [:]
-    /// Serials whose screen was opened automatically during the current connection.
-    /// Cleared when the device disconnects so the screen reopens on the next connection.
-    private var autoOpened: Set<String> = []
 
     init() {
         switch PhoneFarmStore.shared {
@@ -141,7 +138,6 @@ final class DeviceManager: ObservableObject {
                 devices = discovered
             }
             adbError = nil
-            openConnectedScreens()
             cleanSubmittedPhotos(adb: adb)
         } catch {
             adbError = error.localizedDescription
@@ -166,17 +162,8 @@ final class DeviceManager: ObservableObject {
         }
     }
 
-    /// Opens scrcpy once per connection for every ready device. Closing the window keeps it
-    /// closed until the phone disconnects and connects again.
-    private func openConnectedScreens() {
-        let ready = Set(devices.filter(\.isReady).map(\.id))
-        autoOpened.formIntersection(ready)
-        guard scrcpyAvailable else { return }
-        for device in devices where device.isReady && !autoOpened.contains(device.id) {
-            autoOpened.insert(device.id)
-            open(device)
-        }
-    }
+    /// True when a proxy is saved for the phone (shown on its card).
+    func hasProxy(_ device: AndroidDevice) -> Bool { savedProxies[device.id]?.endpoint != nil }
 
     func open(_ device: AndroidDevice) {
         guard device.isReady, adbError == nil, sessions[device.id] == nil else { return }
