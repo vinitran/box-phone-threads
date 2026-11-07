@@ -21,6 +21,7 @@ final class DeviceManager: ObservableObject {
 
     private let storage: PhoneFarmStore?
     private var threadsTasks: [String: Task<Void, Never>] = [:]
+    private var photoCleanupTasks: [String: Task<Void, Never>] = [:]
     /// Serials whose screen was opened automatically during the current connection.
     /// Cleared when the device disconnects so the screen reopens on the next connection.
     private var autoOpened: Set<String> = []
@@ -128,8 +129,27 @@ final class DeviceManager: ObservableObject {
             }
             adbError = nil
             openConnectedScreens()
+            cleanSubmittedPhotos(adb: adb)
         } catch {
             adbError = error.localizedDescription
+        }
+    }
+
+    private func cleanSubmittedPhotos(adb: URL) {
+        guard let storage else { return }
+        for device in devices where device.isReady && photoCleanupTasks[device.serial] == nil {
+            do {
+                guard try storage.submittedPhotos(serial: device.serial).contains(where: { $0.removeAfter <= Date() }) else { continue }
+            } catch {
+                storageError = error.localizedDescription
+                continue
+            }
+            photoCleanupTasks[device.serial] = Task {
+                defer { photoCleanupTasks.removeValue(forKey: device.serial) }
+                do { try await ThreadsAttachments.cleanupSubmitted(adb: adb, serial: device.serial) }
+                catch is CancellationError { }
+                catch { storageError = error.localizedDescription }
+            }
         }
     }
 
@@ -338,6 +358,7 @@ final class DeviceManager: ObservableObject {
 
     func stopAll() {
         for task in threadsTasks.values { task.cancel() }
+        for task in photoCleanupTasks.values { task.cancel() }
         for command in sessions.values {
             command.stop()
         }

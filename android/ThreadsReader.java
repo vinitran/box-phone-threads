@@ -470,6 +470,9 @@ public final class ThreadsReader {
     private static JSONObject updateProfile(UiAutomation automation, JSONObject request) throws JSONException {
         String action = request.getString("action");
         String bio = request.optString("bio").trim();
+        if (action.equals("select_avatar")) {
+            return request.optInt("photoID") > 0 ? selectAvatarPhoto(automation) : outcome("avatar_unavailable");
+        }
         if (!action.equals("bio") && !action.equals("avatar")) return outcome("unsupported");
         if (action.equals("bio") && (bio.isEmpty() || bio.codePointCount(0, bio.length()) > 150)) {
             return outcome("invalid_bio");
@@ -491,6 +494,26 @@ public final class ThreadsReader {
             }
         }
         return action.equals("bio") ? saveBio(automation, bio) : openAvatarPicker(automation);
+    }
+
+    private static JSONObject selectAvatarPhoto(UiAutomation automation) throws JSONException {
+        // Swift verifies the prepared MediaStore ID through ADB immediately before this action.
+        AccessibilityNodeInfo root = threadsRoot(automation);
+        AccessibilityNodeInfo recents = find(root, "spinner_title_text");
+        if (recents == null || !("Recents".equals(string(recents.getText())) || "Gần đây".equals(string(recents.getText())))) return outcome("photos_changed");
+        AccessibilityNodeInfo grid = find(root, "media_picker_grid_view");
+        if (grid == null || grid.getChildCount() == 0) return outcome("avatar_unavailable");
+        AccessibilityNodeInfo first = find(grid.getChild(0), "gallery_grid_item_thumbnail");
+        if (first == null || !press(automation, first)) return outcome("avatar_unavailable");
+        for (int attempt = 0; attempt < 16; attempt++) {
+            SystemClock.sleep(180);
+            root = threadsRoot(automation);
+            grid = find(root, "media_picker_grid_view");
+            first = grid == null || grid.getChildCount() == 0 ? null : find(grid.getChild(0), "gallery_grid_item_thumbnail");
+            String label = first == null ? "" : string(first.getContentDescription());
+            if (find(root, "crop_image_view") != null && (label.startsWith("Selected ") || label.startsWith("Đã chọn"))) return outcome("avatar_ready");
+        }
+        return outcome("avatar_unavailable");
     }
 
     private static JSONObject saveBio(UiAutomation automation, String bio) throws JSONException {

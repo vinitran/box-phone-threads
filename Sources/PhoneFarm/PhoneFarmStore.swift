@@ -160,6 +160,15 @@ final class PhoneFarmStore {
         let removeAfter: Date
     }
 
+    func setting(_ key: String) throws -> String? {
+        try rows("SELECT value FROM app_settings WHERE key = ?", [key]).first?.first ?? nil
+    }
+
+    func saveSetting(_ key: String, value: String) throws {
+        try execute("INSERT INTO app_settings(key, value, updated_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    [key, value, now])
+    }
+
     func recordComment(serial: String) throws {
         try execute("INSERT INTO comments(serial, posted_at) VALUES(?, ?)", [serial, now])
     }
@@ -204,10 +213,11 @@ final class PhoneFarmStore {
         return try JSONDecoder().decode([SubmittedPhotos].self, from: Data(value.utf8))
     }
 
-    func queueSubmittedPhotos(_ batch: ThreadsAttachments.Batch, serial: String) throws {
-        guard batch.reusable != true else { return }
+    func queueSubmittedPhotos(_ batch: ThreadsAttachments.Batch, serial: String, submittedAt: Date = Date()) throws {
+        guard batch.isDisposable else { return }
         var photos = try submittedPhotos(serial: serial)
-        photos.append(.init(batch: batch, removeAfter: Date().addingTimeInterval(20 * 60)))
+        photos.removeAll { $0.batch.album == batch.album }
+        photos.append(.init(batch: batch, removeAfter: submittedAt.addingTimeInterval(20 * 60)))
         try saveSubmittedPhotos(photos, serial: serial)
     }
 

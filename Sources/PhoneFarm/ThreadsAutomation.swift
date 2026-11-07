@@ -128,7 +128,6 @@ enum ThreadsAutomation {
             interactions.warning = "AI chưa trả về đúng bài để bình luận."
             return interactions
         }
-        let batch = try await ThreadsAttachments.prepare(adb: adb, serial: serial, images: settings.pickImages(), progress: progress)
         let likes = [decision.like].compactMap { $0 }.filter {
             $0 != reply.index && allowed[$0]?.canLike == true
         }
@@ -162,7 +161,7 @@ enum ThreadsAutomation {
             return interactions
         }
         let status = try await ThreadsComment.send(adb: adb, serial: serial, id: id, text: text,
-                                                   stable: true, forward: reply.index > position, attachments: batch, progress: progress)
+                                                   stable: true, forward: reply.index > position, progress: progress)
         logger.info("Reply result: \(status, privacy: .public)")
         switch status {
         case "reply_submitted":

@@ -74,7 +74,7 @@ struct ThreadsSettingsSheet: View {
                         .foregroundStyle(.secondary).lineLimit(3)
                     Text("Hai ảnh khác nhau được chọn ngẫu nhiên. app_store.png luôn là ảnh thứ 2. Chỉ đăng khi đủ ba ảnh.")
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Ảnh đã nhập được giữ trên điện thoại để dùng lại. Chỉ chuyển thêm ảnh mới, ảnh thay đổi hoặc ảnh bị xóa.")
+                    Text("Mỗi bình luận chuyển mới đủ ba ảnh với chấm pixel ngẫu nhiên. Tự dọn bộ ảnh đó sau 20 phút kể từ lúc bấm Đăng; giữ ảnh của bản nháp hoặc lượt chưa gửi.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(Array(images.enumerated()), id: \.offset) { index, file in

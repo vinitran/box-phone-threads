@@ -44,16 +44,12 @@ enum ThreadsComment {
     static func send(
         adb: URL, serial: String, id: String, text: String,
         stable: Bool = false, forward: Bool = false,
-        attachments: ThreadsAttachments.Batch? = nil,
         progress: @escaping @MainActor @Sendable (DeviceProgress) -> Void
     ) async throws -> String {
         let keys = try Telex.keys(for: text)
-        let batch: ThreadsAttachments.Batch
-        if let attachments { batch = attachments }
-        else {
-            let settings = try PhoneFarmStore.shared.get().threadsSettings().validated()
-            batch = try await ThreadsAttachments.prepare(adb: adb, serial: serial, images: settings.pickImages(), progress: progress)
-        }
+        try await ThreadsAttachments.cleanupSubmitted(adb: adb, serial: serial)
+        let settings = try PhoneFarmStore.shared.get().threadsSettings().validated()
+        let batch = try await ThreadsAttachments.prepare(adb: adb, serial: serial, images: settings.pickImages(), progress: progress)
         progress(DeviceProgress(message: "Đang tìm bài để bình luận"))
         let request = Request(id: id, action: "reply",
                               reply: text, stable: stable, forward: forward)

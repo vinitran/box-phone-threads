@@ -15,6 +15,9 @@ struct ThreadsFeedSheet: View {
     @State private var showJSON = false
     @State private var showProfile = false
     @State private var bio = ""
+    @State private var avatarFolder = AvatarImages.defaultFolder
+    @State private var avatarImage: URL?
+    @State private var avatarCount = 0
 
     private struct Post: Decodable, Identifiable {
         let id: String
@@ -40,6 +43,7 @@ struct ThreadsFeedSheet: View {
     private struct ProfileAction: Encodable {
         let action: String
         let bio: String?
+        var photoID: Int? = nil
     }
 
     private var selected: Post? { posts.first { $0.id == selectedID } }
@@ -49,7 +53,7 @@ struct ThreadsFeedSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("\(profileOnly ? "Ảnh đại diện & Bio" : "Threads") · \(device.name)").font(.title2.weight(.semibold))
-            Text(profileOnly ? "Nhập bio mới để cập nhật. Đổi ảnh đại diện sẽ mở thư viện ảnh trên điện thoại để bạn chọn và lưu." : "Mở tab Trang chủ trên điện thoại. Phone Farm có thể lướt xuống hoặc đọc ngẫu nhiên từ 5 đến 10 bài trong feed.")
+            Text(profileOnly ? "Nhập bio mới để cập nhật. Chọn ảnh đại diện ngẫu nhiên từ thư mục trên máy tính, xem trước rồi mở ảnh trong Threads để căn chỉnh và lưu." : "Mở tab Trang chủ trên điện thoại. Phone Farm có thể lướt xuống hoặc đọc ngẫu nhiên từ 5 đến 10 bài trong feed.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !profileOnly { HStack {
@@ -62,12 +66,36 @@ struct ThreadsFeedSheet: View {
             }
 
             if showProfile || profileOnly {
-                HStack {
-                    TextField("Bio mới", text: $bio)
-                    Button("AI tạo bio") { Task { await generateBio() } }
-                    Button("Cập nhật bio") { Task { await updateProfile("bio") } }
-                        .disabled(bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bio.unicodeScalars.count > 150)
-                    Button("Đổi ảnh đại diện") { Task { await updateProfile("avatar") } }
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        TextField("Bio mới", text: $bio)
+                        Button("AI tạo bio") { Task { await generateBio() } }
+                        Button("Cập nhật bio") { Task { await updateProfile("bio") } }
+                            .disabled(bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bio.unicodeScalars.count > 150)
+                    }
+                    HStack(alignment: .top, spacing: 12) {
+                        if let avatarImage, let image = NSImage(contentsOf: avatarImage) {
+                            Image(nsImage: image).resizable().scaledToFill()
+                                .frame(width: 82, height: 82).clipShape(Circle())
+                                .accessibilityLabel("Ảnh đại diện đã chọn: \(avatarImage.lastPathComponent)")
+                        } else {
+                            Image(systemName: "person.crop.circle").font(.system(size: 62))
+                                .frame(width: 82, height: 82).foregroundStyle(.secondary)
+                        }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Ảnh đại diện · \(avatarCount) ảnh").font(.headline)
+                            Text(avatarFolder.path).font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(2).textSelection(.enabled)
+                            if let avatarImage { Text(avatarImage.lastPathComponent).font(.caption).lineLimit(1) }
+                            HStack {
+                                Button("Chọn thư mục…", action: chooseAvatarFolder)
+                                Button("Chọn ngẫu nhiên", action: chooseRandomAvatar)
+                                    .disabled(avatarCount == 0)
+                                Button("Đổi ảnh đại diện") { Task { await updateProfile("avatar") } }
+                                    .disabled(avatarImage == nil)
+                            }
+                        }
+                    }
                 }
                 .disabled(isWorking)
             }
@@ -105,10 +133,44 @@ struct ThreadsFeedSheet: View {
         .padding(22)
         .frame(width: 640)
         .interactiveDismissDisabled(isWorking)
+        .task { loadAvatarImages() }
         .onChange(of: selectedID) { _ in reply = "" }
         .onChange(of: status) { value in
             if !value.isEmpty { onActivity(value) }
         }
+    }
+
+    private func loadAvatarImages() {
+        avatarFolder = AvatarImages.folder()
+        avatarCount = AvatarImages.images(in: avatarFolder).count
+        do { avatarImage = try AvatarImages.randomImage(excluding: avatarImage) }
+        catch { avatarImage = nil }
+    }
+
+    private func chooseRandomAvatar() {
+        do {
+            avatarCount = AvatarImages.images(in: avatarFolder).count
+            let image = try AvatarImages.randomImage(excluding: avatarImage)
+            avatarImage = image
+            status = "Đã chọn \(image.lastPathComponent). Bấm Đổi ảnh đại diện để dùng ảnh này."
+        } catch {
+            avatarImage = nil
+            status = error.localizedDescription
+        }
+    }
+
+    private func chooseAvatarFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = avatarFolder
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        do {
+            try AvatarImages.setFolder(folder)
+            avatarFolder = folder
+            chooseRandomAvatar()
+        } catch { status = error.localizedDescription }
     }
 
     private var postActions: some View {
@@ -223,23 +285,45 @@ struct ThreadsFeedSheet: View {
         status = "Đang mở trình chỉnh sửa hồ sơ Threads…"
         defer { isWorking = false }
         do {
-            let payload = try JSONEncoder().encode(ProfileAction(action: action, bio: action == "bio" ? bio : nil))
+            var request = ProfileAction(action: action, bio: action == "bio" ? bio : nil)
+            if action == "avatar" {
+                guard let avatarImage else {
+                    status = "Chọn một ảnh đại diện trước khi tiếp tục."
+                    return
+                }
+                status = "Đang chuyển ảnh \(avatarImage.lastPathComponent) sang điện thoại…"
+                request.photoID = try await ThreadsAttachments.prepareAvatar(adb: adb, serial: device.serial, image: avatarImage)
+                status = "Đang mở ảnh đại diện đã chọn trong Threads…"
+            }
+            let payload = try JSONEncoder().encode(request)
             let output = try await AndroidAccessibility.read(adb: adb, serial: device.serial, entry: .threadsProfile,
                                                              timeout: 22, payload: payload)
             guard output.status == 0, let line = output.output.split(whereSeparator: \.isNewline).last else {
                 status = "Threads chưa xác nhận cập nhật hồ sơ."
                 return
             }
-            let result = try JSONDecoder().decode(Result.self, from: Data(line.utf8))
+            var result = try JSONDecoder().decode(Result.self, from: Data(line.utf8))
+            if action == "avatar", result.actionStatus == "avatar_picker_open", let photoID = request.photoID {
+                try await ThreadsAttachments.verifyAvatar(id: photoID, adb: adb, serial: device.serial)
+                let selected = try await AndroidAccessibility.read(adb: adb, serial: device.serial, entry: .threadsProfile,
+                    timeout: 10, payload: JSONEncoder().encode(ProfileAction(action: "select_avatar", bio: nil, photoID: photoID)))
+                guard selected.status == 0, let selectedLine = selected.output.split(whereSeparator: \.isNewline).last else {
+                    status = "Threads chưa xác nhận ảnh đại diện. Hãy kiểm tra ảnh trên điện thoại."
+                    return
+                }
+                result = try JSONDecoder().decode(Result.self, from: Data(selectedLine.utf8))
+            }
             switch result.actionStatus {
             case "bio_saved": status = "Bio mới đã xuất hiện trên hồ sơ."
             case "bio_unverified": status = "Đã bấm lưu. Hãy kiểm tra bio trên hồ sơ."
             case "avatar_picker_open": status = "Chọn ảnh trên điện thoại, sau đó lưu hồ sơ trong Threads."
+            case "avatar_ready": status = "Đã mở ảnh \(avatarImage?.lastPathComponent ?? "đã chọn"). Căn chỉnh, bấm Done/Xong và lưu hồ sơ trên điện thoại."
+            case "photos_changed", "avatar_unavailable": status = "Chưa xác nhận được ảnh đại diện đã chọn. Hãy đóng thư viện trên điện thoại rồi thử lại."
             case "permission_required": status = "Hãy cấp quyền ảnh cho Threads trên điện thoại để tiếp tục."
             default: status = "Chưa cập nhật được. Hãy mở hồ sơ của bạn trong Threads rồi thử lại."
             }
         } catch {
-            status = "Không thực hiện được thao tác hồ sơ."
+            status = error.localizedDescription
         }
     }
 
