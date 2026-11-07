@@ -1,0 +1,8 @@
+{
+  "cipher" : "aes-256-gcm",
+  "iterations" : 600000,
+  "kdf" : "pbkdf2-sha256",
+  "salt" : "ws75Z+jsRELI1pTjuNjLUA==",
+  "sealed" : "dIMF5nFGjtHdgxn90pcelvVKCTNQ3YcO4Uw\/SZjXh3+H1ElQmnsjRHnphGdLRp\/qWq\/q4KZeE9MadWqAIdp3",
+  "version" : 1
+}
