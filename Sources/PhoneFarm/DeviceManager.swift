@@ -11,6 +11,17 @@ final class DeviceManager: ObservableObject {
     @Published private(set) var stopping: Set<String> = []
     @Published private(set) var runningThreads: Set<String> = []
     @Published private(set) var installingAPK: Set<String> = []
+    /// Threads/Instagram missing on each connected phone, checked once per connection.
+    @Published private(set) var missingApps: [String: [AppBundles.App]] = [:]
+    private var appsChecked: Set<String> = []
+
+    enum BundleStatus: Equatable {
+        case idle, working(String), ready(String), failed(String)
+    }
+    /// Whether the Threads/Instagram APKs are downloaded on this Mac and ready to install.
+    @Published private(set) var bundleStatus: BundleStatus = .idle
+    private var bundlesTask: Task<[AppBundles.Prepared], Error>?
+    private var bundlesPreparedAt: Date?
     @Published private(set) var nextThreadsRun: [String: Date] = [:]
     @Published private(set) var activities: [String: Activity] = [:]
     @Published private(set) var storageError: String?
@@ -120,6 +131,7 @@ final class DeviceManager: ObservableObject {
                     try reloadSavedProxies()
                     storageError = nil
                     reloadCommentCounts()
+                    checkInstalledApps()
                 } catch {
                     devices = discovered
                     storageError = error.localizedDescription
@@ -212,6 +224,71 @@ final class DeviceManager: ObservableObject {
         }
     }
 
+    private func checkInstalledApps() {
+        let ready = Set(devices.filter(\.isReady).map(\.id))
+        appsChecked.formIntersection(ready)
+        missingApps = missingApps.filter { ready.contains($0.key) }
+        for device in devices where device.isReady && !appsChecked.contains(device.id) {
+            appsChecked.insert(device.id)
+            Task { await refreshInstalledApps(device) }
+        }
+    }
+
+    private func refreshInstalledApps(_ device: AndroidDevice) async {
+        guard let adb = ToolPaths.adb(), let packages = await AppBundles.installedPackages(adb: adb, serial: device.serial) else {
+            appsChecked.remove(device.id)
+            return
+        }
+        let missing = AppBundles.apps.filter { !packages.contains($0.package) }
+        if missing.isEmpty { missingApps.removeValue(forKey: device.id) } else { missingApps[device.id] = missing }
+    }
+
+    /// Downloads missing APKs once; concurrent callers share the same download.
+    /// A successful result is reused for 6 hours, then R2 is checked again for a newer version.
+    @discardableResult
+    func prepareBundledApps(force: Bool = false) async throws -> [AppBundles.Prepared] {
+        if force || (bundlesPreparedAt.map { Date().timeIntervalSince($0) > 6 * 60 * 60 } ?? false) {
+            if bundlesPreparedAt != nil { bundlesTask = nil }
+        }
+        if let task = bundlesTask { return try await task.value }
+        bundleStatus = .working("Đang kiểm tra APK Threads & Instagram…")
+        let task = Task { @MainActor in
+            try await AppBundles.prepare { self.bundleStatus = .working($0) }
+        }
+        bundlesTask = task
+        do {
+            let prepared = try await task.value
+            bundlesPreparedAt = Date()
+            bundleStatus = .ready(prepared.map { "\($0.app.name) \($0.manifest.versionName)" }.joined(separator: " · "))
+            return prepared
+        } catch {
+            bundlesTask = nil
+            bundlesPreparedAt = nil
+            bundleStatus = .failed(error.localizedDescription)
+            throw error
+        }
+    }
+
+    /// Installs Threads and Instagram from the APKs hosted on R2 (cached on the Mac).
+    func installBundledApps(_ device: AndroidDevice) async {
+        guard device.isReady, adbError == nil, !runningThreads.contains(device.id),
+              installingAPK.insert(device.id).inserted else { return }
+        defer { installingAPK.remove(device.id) }
+        guard let adb = ToolPaths.adb() else { return }
+        do {
+            reportActivity(device, progress: DeviceProgress(message: "Đang chuẩn bị APK Threads & Instagram…"))
+            let prepared = try await prepareBundledApps()
+            let summary = try await AppBundles.install(prepared, on: device.serial, adb: adb) { message in
+                self.reportActivity(device, progress: DeviceProgress(message: message))
+            }
+            reportActivity(device, progress: DeviceProgress(message: "Đã cài · " + summary))
+        } catch {
+            reportActivity(device, progress: DeviceProgress(message: "Chưa cài được: " + error.localizedDescription), hasIssue: true)
+            actionError = ActionError(title: "Không thể cài Threads & Instagram lên \(device.name)", details: error.localizedDescription)
+        }
+        await refreshInstalledApps(device)
+    }
+
     func installAPK(_ device: AndroidDevice, files: [URL]) async {
         guard device.isReady, adbError == nil, !files.isEmpty, !runningThreads.contains(device.id),
               installingAPK.insert(device.id).inserted else { return }
@@ -226,6 +303,7 @@ final class DeviceManager: ObservableObject {
             let installed = try await APKInstaller.install(files, adb: adb, serial: device.serial)
             let threads = await APKInstaller.installedVersion(of: "com.instagram.barcelona", adb: adb, serial: device.serial)
             reportActivity(device, progress: DeviceProgress(message: "Đã cài \(installed)" + (threads.map { " · Threads \($0)" } ?? "")))
+            await refreshInstalledApps(device)
         } catch {
             reportActivity(device, progress: DeviceProgress(message: "Chưa cài được APK: \(error.localizedDescription)"), hasIssue: true)
             actionError = ActionError(title: "Không thể cài APK lên \(device.name)", details: error.localizedDescription)

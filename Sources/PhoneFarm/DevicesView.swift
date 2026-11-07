@@ -43,6 +43,8 @@ struct DevicesView: View {
             // Check on launch, then every 6 hours while the app stays open.
             while !Task.isCancelled {
                 await updater.check()
+                // Keep the Threads/Instagram APKs downloaded so new phones can be set up right away.
+                _ = try? await manager.prepareBundledApps()
                 try? await Task.sleep(for: .seconds(6 * 60 * 60))
             }
         }
@@ -130,6 +132,7 @@ struct DevicesView: View {
 
                 Spacer(minLength: 8)
 
+                bundleControl
                 updateControl
 
                 HStack(spacing: 6) {
@@ -155,6 +158,37 @@ struct DevicesView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
+    }
+
+    /// State of the Threads/Instagram APKs on this Mac; click to check R2 again.
+    @ViewBuilder
+    private var bundleControl: some View {
+        switch manager.bundleStatus {
+        case .working(let message):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("APK").font(.callout).foregroundStyle(.secondary)
+            }
+            .help(message)
+            .fixedSize()
+        case .ready(let summary):
+            Button {
+                Task { _ = try? await manager.prepareBundledApps(force: true) }
+            } label: {
+                Label("APK", systemImage: "checkmark.circle")
+            }
+            .help("APK đã sẵn sàng để cài: \(summary). Bấm để kiểm tra bản mới trên máy chủ.")
+        case .failed(let message):
+            Button {
+                Task { _ = try? await manager.prepareBundledApps(force: true) }
+            } label: {
+                Label("APK", systemImage: "exclamationmark.triangle")
+            }
+            .foregroundStyle(.orange)
+            .help("Chưa tải được APK Threads & Instagram: \(message) Bấm để thử lại.")
+        case .idle:
+            EmptyView()
+        }
     }
 
     @ViewBuilder
@@ -376,6 +410,9 @@ private struct DeviceCard: View {
         VStack(alignment: .leading, spacing: 12) {
             titleRow
             activityBlock
+            if let missing = manager.missingApps[device.id], !missing.isEmpty {
+                installAppsButton(missing)
+            }
             proxyRow
             Divider()
             actions
@@ -517,6 +554,24 @@ private struct DeviceCard: View {
         .font(.caption)
     }
 
+    /// Shown while the phone lacks Threads or Instagram; installs both from the APKs saved on the Mac.
+    private func installAppsButton(_ missing: [AppBundles.App]) -> some View {
+        let installing = manager.installingAPK.contains(device.id)
+        return Button {
+            Task { await manager.installBundledApps(device) }
+        } label: {
+            HStack(spacing: 6) {
+                if installing { ProgressView().controlSize(.small) }
+                Label(installing ? "Đang cài…" : "Cài " + missing.map(\.name).joined(separator: " & "),
+                      systemImage: "square.and.arrow.down")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(!canUse || isRunning || installing)
+        .help("Tải APK Threads và Instagram (lần đầu, sau đó dùng lại trên Mac), kiểm tra SHA-256 rồi cài. Máy đã có app cùng hoặc mới hơn sẽ được bỏ qua.")
+    }
+
     /// Picks one APK, several split APKs or an .apks/.xapk bundle and installs it on this phone.
     private func chooseAPK() {
         let panel = NSOpenPanel()
@@ -544,6 +599,8 @@ private struct DeviceCard: View {
 
             Menu {
                 Button("Điều khiển thủ công", action: openManual)
+                Divider()
+                Button("Cài Threads & Instagram") { Task { await manager.installBundledApps(device) } }
                 Button("Cài APK…", action: chooseAPK)
             } label: {
                 Image(systemName: "ellipsis")

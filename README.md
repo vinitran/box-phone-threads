@@ -48,6 +48,14 @@ App vẫn hỏi mật khẩu khi mở và cần cài ADB, scrcpy như hướng d
 3. Mỗi máy ở trạng thái **Sẵn sàng** tự mở cửa sổ scrcpy, cả lúc mở app lẫn khi cắm thêm máy. Cửa sổ hiển thị model và serial để phân biệt các máy cùng model. Phiên mở từ app tắt âm thanh.
 4. Đóng trực tiếp cửa sổ scrcpy để kết thúc phiên. Máy đã đóng không tự mở lại cho đến khi ngắt rồi kết nối lại.
 
+## Cài Threads và Instagram cho máy mới
+
+APK của Threads và Instagram được lưu trên Cloudflare R2, mỗi app một thư mục (`threads/`, `instagram/`) gồm các file APK (base và split) cùng `manifest.json` ghi phiên bản, Android tối thiểu và SHA-256 từng file. Khi mở khóa app và sau đó mỗi 6 giờ, Phone Farm đọc manifest, tải file còn thiếu hoặc đã đổi về `~/Library/Application Support/Phone Farm/apks/` và kiểm tra SHA-256. Trạng thái hiển thị ở biểu tượng **APK** cạnh nút phiên bản (bấm để kiểm tra lại). Không có mạng thì dùng bản đã tải gần nhất.
+
+Khi một máy kết nối mà thiếu Threads hoặc Instagram, thẻ máy hiện nút **Cài Threads & Instagram**; mục cùng tên cũng có trong menu **⋯**. App đã có bản cùng hoặc mới hơn trên máy được bỏ qua; máy cần Android 9 trở lên. Sau khi cài cần mở app và đăng nhập trên điện thoại.
+
+Để phát hành bản APK mới: kéo APK từ một máy đã cài (`adb shell pm path <package>` rồi `adb pull`), tạo `manifest.json` cùng định dạng với `versionCode` mới và SHA-256 của từng file, rồi tải cả thư mục lên R2.
+
 ## Cài APK lên điện thoại
 
 Mở menu **⋯** trên thẻ máy và chọn **Cài APK…**, rồi chọn file trên Mac. Có thể chọn một file `.apk`, nhiều file APK của cùng một app (split APK, ví dụ `base.apk` và các `split_config.*.apk`), hoặc file gói `.apks`/`.xapk`. Phone Farm cài bằng `adb install -r` (hoặc `install-multiple -r`), giữ dữ liệu app nếu máy đã có app. Sau khi cài, thẻ máy hiển thị kết quả và phiên bản Threads trên máy. Nếu máy đang có bản mới hơn hoặc app được ký bằng chữ ký khác, cần gỡ app cũ trước.
