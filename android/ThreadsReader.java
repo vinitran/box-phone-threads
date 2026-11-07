@@ -185,7 +185,7 @@ public final class ThreadsReader {
             if (displayed != null && match.sameContent(displayed)) editor = find(detail, "permalink_inline_composer");
         }
         if (editor == null) return outcome("composer_unavailable");
-        if (!string(editor.getText()).isEmpty()) return outcome("draft_exists");
+        if (!editorText(editor).isEmpty()) return outcome("draft_exists");
         if (!press(automation, editor)) return outcome("control_unavailable");
         for (int attempt = 0; attempt < 12; attempt++) {
             SystemClock.sleep(180);
@@ -194,7 +194,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo detail = find(root, "PermalinkScreen");
             editor = find(detail, "permalink_inline_composer");
             if (editor == null) continue;
-            if (!string(editor.getText()).isEmpty()) return outcome("draft_exists");
+            if (!editorText(editor).isEmpty()) return outcome("draft_exists");
             String context = replyContext(detail, match.author);
             if (context != null) {
                 return outcome("reply_ready").put("target", context).put("author", match.author).put("composer", "inline")
@@ -209,7 +209,7 @@ public final class ThreadsReader {
         hideKeyboard(automation);
         AccessibilityNodeInfo editor = waitFor(automation, "new_thread_screen_composer");
         if (editor == null) return outcome("composer_unavailable");
-        if (!string(editor.getText()).isEmpty()) return outcome("draft_exists");
+        if (!editorText(editor).isEmpty()) return outcome("draft_exists");
         if (composerCarousel(editor) != null) return outcome("draft_exists");
         Post quoted = inspectFullReplyPost(automation);
         for (int attempt = 0; attempt < 6 && (quoted == null || !match.sameContent(quoted)); attempt++) {
@@ -221,7 +221,7 @@ public final class ThreadsReader {
         if (editor == null || !press(automation, editor)) return outcome("composer_unavailable");
         editor = waitFor(automation, "new_thread_screen_composer");
         if (editor == null) return outcome("composer_unavailable");
-        if (!string(editor.getText()).isEmpty()) return outcome("draft_exists");
+        if (!editorText(editor).isEmpty()) return outcome("draft_exists");
         return outcome("reply_ready").put("target", quoted.token(true)).put("author", quoted.author)
             .put("composer", "full").put("postID", quoted.token(true));
     }
@@ -323,6 +323,18 @@ public final class ThreadsReader {
             }
         }
         return outcome("draft_failed");
+    }
+
+    /**
+     * Text typed in a composer. An empty field reports its hint ("Reply to…") as text on Android 10
+     * and older, which must not count as a draft.
+     */
+    private static String editorText(AccessibilityNodeInfo editor) {
+        if (editor == null) return "";
+        if (android.os.Build.VERSION.SDK_INT >= 26 && editor.isShowingHintText()) return "";
+        String text = string(editor.getText());
+        CharSequence hint = android.os.Build.VERSION.SDK_INT >= 26 ? editor.getHintText() : null;
+        return hint != null && hint.length() > 0 && text.contentEquals(hint) ? "" : text;
     }
 
     private static AccessibilityNodeInfo composerCarousel(AccessibilityNodeInfo editor) {
@@ -562,7 +574,7 @@ public final class ThreadsReader {
             root = threadsRoot(automation);
             editor = findEditable(root);
             AccessibilityNodeInfo next = findLabel(root, "Next", "Tiếp");
-            if (editor == null || !bio.equals(string(editor.getText())) || next == null
+            if (editor == null || !bio.equals(editorText(editor)) || next == null
                     || !press(automation, next)) return outcome("bio_unavailable");
             AccessibilityNodeInfo done = waitFor(automation, "profile_editor_card_done_button");
             if (done == null || findLabel(threadsRoot(automation), bio) == null) return outcome("bio_unavailable");
@@ -735,7 +747,7 @@ public final class ThreadsReader {
         AccessibilityNodeInfo feed = getFeed(automation);
         if (feed == null) {
             AccessibilityNodeInfo editor = replyEditor(threadsRoot(automation));
-            return outcome(editor != null && !string(editor.getText()).isEmpty() ? "draft_exists" : "feed_unavailable");
+            return outcome(editor != null && !editorText(editor).isEmpty() ? "draft_exists" : "feed_unavailable");
         }
         String before = viewport(feed);
         if (!homeTapped) {
@@ -794,7 +806,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo editor = replyEditor(root);
             boolean navigationReady = root != null && (editor != null || getFeed(automation) != null
                 || find(root, "PermalinkScreen") != null || find(root, "barcelona_tab_main_feed") != null);
-            if (navigationReady && (editor == null || string(editor.getText()).isEmpty())) return refreshFeed(automation);
+            if (navigationReady && (editor == null || editorText(editor).isEmpty())) return refreshFeed(automation);
             SystemClock.sleep(200);
         }
         return outcome("home_unavailable");
@@ -868,7 +880,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo feed = getFeed(automation);
             if (feed == null) {
                 AccessibilityNodeInfo editor = replyEditor(threadsRoot(automation));
-                reason = editor != null && !string(editor.getText()).isEmpty() ? "draft_exists" : "feed_unavailable";
+                reason = editor != null && !editorText(editor).isEmpty() ? "draft_exists" : "feed_unavailable";
                 break;
             }
             int previousCount = posts.size();
@@ -940,7 +952,7 @@ public final class ThreadsReader {
                 continue;
             }
             if (editor != null) {
-                if (!string(editor.getText()).isEmpty()) return false;
+                if (!editorText(editor).isEmpty()) return false;
                 AccessibilityNodeInfo back = find(root, "navigation_bar_back_button");
                 if (back == null || !press(automation, back)) {
                     automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
