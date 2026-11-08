@@ -37,7 +37,7 @@ struct ProxySheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                if fromPhone || (savedProxy.map { $0.mode != "off" } ?? false) {
+                if fromPhone || (savedProxy?.isActive ?? false) {
                     Button("Gỡ proxy", role: .destructive) { Task { await remove() } }
                 }
                 Spacer()
@@ -62,13 +62,8 @@ struct ProxySheet: View {
                 fromPhone = true
                 return
             }
-            guard let savedProxy, let endpoint = savedProxy.endpoint else { return }
-            var value = endpoint.address
-            if let reference = savedProxy.credentialID {
-                let login = try ProxyPasswords.load(reference)
-                value += ":" + login.username + ":" + login.password
-            }
-            input = value
+            guard let savedProxy, savedProxy.isActive else { return }
+            input = savedProxy.profile?.line ?? savedProxy.endpoint?.address ?? ""
         } catch {
             self.error = error.localizedDescription
         }
@@ -94,7 +89,7 @@ struct ProxySheet: View {
             report("Đang kiểm tra proxy")
             let ip = try await ProxyTester.publicIP(through: profile)
             report("Đang lưu proxy")
-            try PhoneFarmStore.shared.get().saveTunnelProxy(profile, device: device)
+            try PhoneFarmStore.shared.get().saveProxy(profile, device: device)
             onSaved()
             onApplied(input.trimmingCharacters(in: .whitespacesAndNewlines))
             report("Proxy đã lưu · \(profile.endpoint.address) · IP \(ip) · đang nối lại internet qua cáp")
@@ -112,7 +107,7 @@ struct ProxySheet: View {
         defer { isWorking = false }
         do {
             report("Đang gỡ proxy")
-            try PhoneFarmStore.shared.get().saveProxy(.off, device: device)
+            try PhoneFarmStore.shared.get().removeProxy(device: device)
             onSaved()
             onApplied(nil)
             report("Đã gỡ proxy · điện thoại dùng mạng của Mac qua cáp")

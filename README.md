@@ -119,7 +119,7 @@ Biểu tượng cáp trên thẻ máy hiển thị trạng thái. Màu xanh: đa
 
 Bấm **Proxy** để gắn proxy. Cửa sổ có một ô nhập `host:port:user:pass` hoặc `host:port` và tự điền lại proxy đã lưu. **Áp dụng** kiểm tra proxy từ Mac (HTTPS qua `CONNECT`, đúng cách relay dùng), lưu proxy rồi nối lại internet của điện thoại qua proxy mới. **Gỡ proxy** xóa proxy; điện thoại vẫn lên internet qua cáp nhưng bằng mạng của Mac.
 
-Phone Farm lưu thiết bị, proxy gần nhất theo serial, kết quả phiên Threads và dấu vết chống bình luận lặp vào SQLite tại `~/Library/Application Support/Phone Farm/phone-farm.sqlite3`. SQLite lưu địa chỉ và tài khoản proxy, mật khẩu nằm trong Keychain. Bấm **Thông tin** để xem dữ liệu thiết bị và hai mươi phiên Threads gần đây. Thiết bị đã lưu tiếp tục xuất hiện với trạng thái ngoại tuyến khi ngắt kết nối. Khóa AI không lưu trong SQLite.
+Phone Farm lưu thiết bị, proxy gần nhất theo serial, kết quả phiên Threads và dấu vết chống bình luận lặp vào SQLite tại `~/Library/Application Support/Phone Farm/phone-farm.sqlite3`. SQLite lưu cả địa chỉ, tài khoản và mật khẩu proxy ở dạng chữ thường (chỉ khóa AI được mã hóa). Proxy lưu bởi bản cũ có mật khẩu trong Keychain không được đọc nữa: biểu tượng cáp báo lỗi, bấm **Proxy** và nhập lại. Bấm **Thông tin** để xem dữ liệu thiết bị và hai mươi phiên Threads gần đây. Thiết bị đã lưu tiếp tục xuất hiện với trạng thái ngoại tuyến khi ngắt kết nối. Khóa AI không lưu trong SQLite.
 
 ## Bàn phím Telex cho Threads
 

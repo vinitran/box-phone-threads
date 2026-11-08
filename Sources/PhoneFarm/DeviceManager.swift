@@ -184,21 +184,19 @@ final class DeviceManager: ObservableObject {
     /// The phone's own proxy comes first, so a phone keeps its proxy on another Mac.
     func proxyAddress(_ device: AndroidDevice) -> String? {
         if let address = identities[device.id]?.proxyAddress { return address }
-        guard let saved = savedProxies[device.id], saved.mode != "off", saved.mode != "unsupported" else { return nil }
+        guard let saved = savedProxies[device.id], saved.isActive else { return nil }
         return saved.endpoint?.address
     }
 
-    /// The proxy the phone's USB tunnel goes through, with its login.
-    func tunnelProxy(_ device: AndroidDevice, interactive: Bool = false) throws -> ProxyProfile? {
+    /// The proxy the phone's USB tunnel goes through, with its login. The phone's file comes first.
+    func tunnelProxy(_ device: AndroidDevice) throws -> ProxyProfile? {
         if let line = identities[device.id]?.proxy, let profile = ProxyProfile(line: line) { return profile }
-        guard let saved = savedProxies[device.id], saved.mode != "off", saved.mode != "unsupported",
-              let endpoint = saved.endpoint else { return nil }
-        guard let reference = saved.credentialID else {
-            return ProxyProfile(host: endpoint.host, port: String(endpoint.port))
+        guard let saved = savedProxies[device.id], saved.isActive else { return nil }
+        guard let profile = saved.profile else {
+            // Never fall back to the Mac's own network for a phone that has a proxy.
+            throw USBTether.TetherError("Chưa có mật khẩu proxy \(saved.endpoint?.address ?? "") (bản cũ lưu trong Keychain). Bấm Proxy và nhập lại proxy.")
         }
-        let login = try ProxyPasswords.load(reference, interactive: interactive)
-        return ProxyProfile(host: endpoint.host, port: String(endpoint.port),
-                            username: login.username, password: login.password)
+        return profile
     }
 
     // MARK: Internet over USB through the phone's proxy
@@ -216,14 +214,7 @@ final class DeviceManager: ObservableObject {
         // Re-read the phone's file, which may have a newer proxy than the one loaded on connect.
         await loadIdentity(device)
         do {
-            let proxy: ProxyProfile?
-            do {
-                proxy = try tunnelProxy(device)
-            } catch {
-                // Saved by another build: ask macOS once, then keep the proxy in the phone's own file.
-                proxy = try tunnelProxy(device, interactive: true)
-                if let proxy { await recordProxy(device, line: proxy.line) }
-            }
+            let proxy = try tunnelProxy(device)
             USBTether.log(device.serial, "proxy " + (proxy?.endpoint.address ?? "none"))
             let port = relayPort(device)
             relays.removeValue(forKey: device.id)?.stop()

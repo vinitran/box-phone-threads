@@ -15,13 +15,20 @@ final class PhoneFarmStore {
         let mode: String
         let updatedAt: String
         let username: String?
-        let credentialID: String?
-        let relayDirectory: String?
-        let relayPort: Int?
+        /// Stored as plain text: only the AI key is encrypted.
+        let password: String?
 
-        func matchesRelay(_ configuration: ProxyConfiguration) -> Bool {
-            guard let relayPort, case .direct(let endpoint) = configuration else { return false }
-            return endpoint.host == "127.0.0.1" && endpoint.port == relayPort
+        var isActive: Bool { mode != "off" && mode != "unsupported" && endpoint != nil }
+
+        /// The saved proxy, or nil when it has a login without a password (saved in the Keychain by
+        /// older versions, which this version no longer reads).
+        var profile: ProxyProfile? {
+            guard isActive, let endpoint else { return nil }
+            guard let username, !username.isEmpty else {
+                return ProxyProfile(host: endpoint.host, port: String(endpoint.port))
+            }
+            guard let password else { return nil }
+            return ProxyProfile(host: endpoint.host, port: String(endpoint.port), username: username, password: password)
         }
     }
 
@@ -115,6 +122,10 @@ final class PhoneFarmStore {
                         SELECT serial, COALESCE(finished_at, started_at) FROM runs
                         WHERE message LIKE '%Đã bấm Đăng 1 lần%'
                         """)
+                }
+                // Added without a version bump so older Phone Farm versions still open the database.
+                if try !rows("PRAGMA table_info(proxies)").contains(where: { $0[1] == "password" }) {
+                    try execute("ALTER TABLE proxies ADD COLUMN password TEXT")
                 }
                 try execute("PRAGMA user_version = 4")
                 try execute("""
@@ -254,89 +265,35 @@ final class PhoneFarmStore {
 
     func savedProxy(serial: String) throws -> SavedProxy? {
         guard let row = try rows("""
-            SELECT host, port, mode, updated_at, username, credential_id, relay_directory, relay_port
-            FROM proxies WHERE serial = ?
+            SELECT host, port, mode, updated_at, username, password FROM proxies WHERE serial = ?
             """, [serial]).first
         else { return nil }
         let endpoint = ProxyEndpoint(host: row[0] ?? "", port: row[1] ?? "")
-        return SavedProxy(endpoint: endpoint, mode: row[2]!, updatedAt: row[3]!,
-                          username: row[4], credentialID: row[5], relayDirectory: row[6],
-                          relayPort: row[7].flatMap(Int.init))
+        return SavedProxy(endpoint: endpoint, mode: row[2]!, updatedAt: row[3]!, username: row[4], password: row[5])
     }
 
-    func saveProxy(_ configuration: ProxyConfiguration, device: AndroidDevice) throws {
-        let previous = try savedProxy(serial: device.serial)
-        if previous?.matchesRelay(configuration) == true { return }
-        let endpoint: ProxyEndpoint?
-        let mode: String
-        switch configuration {
-        case .direct(let value): endpoint = value; mode = "direct"
-        case .off: endpoint = nil; mode = "off"
-        case .unsupported: endpoint = nil; mode = "unsupported"
-        }
+    /// Saves the proxy the phone's USB tunnel goes through.
+    func saveProxy(_ profile: ProxyProfile, device: AndroidDevice) throws {
         try transaction {
             try remember(device)
             try execute("""
-                INSERT INTO proxies(serial, host, port, mode, updated_at) VALUES(?, ?, ?, ?, ?)
+                INSERT INTO proxies(serial, host, port, mode, updated_at, username, password)
+                VALUES(?, ?, ?, 'tunnel', ?, ?, ?)
                 ON CONFLICT(serial) DO UPDATE SET
-                    host = COALESCE(excluded.host, proxies.host),
-                    port = COALESCE(excluded.port, proxies.port),
-                    mode = excluded.mode, updated_at = excluded.updated_at,
-                    username = CASE WHEN excluded.mode = 'direct' THEN NULL ELSE proxies.username END,
-                    credential_id = CASE WHEN excluded.mode = 'direct' THEN NULL ELSE proxies.credential_id END,
-                    relay_directory = NULL, relay_port = NULL
-                """, [device.serial, endpoint?.host, endpoint.map { String($0.port) }, mode, now])
+                    host = excluded.host, port = excluded.port, mode = excluded.mode,
+                    updated_at = excluded.updated_at, username = excluded.username, password = excluded.password,
+                    credential_id = NULL, relay_directory = NULL, relay_port = NULL
+                """, [device.serial, profile.endpoint.host, String(profile.endpoint.port), now,
+                      profile.login?.username, profile.login?.password])
         }
-        if mode == "direct", let reference = previous?.credentialID { ProxyPasswords.remove(reference) }
     }
 
-    /// Saves the proxy the phone's USB tunnel goes through; its password stays in the Keychain.
-    func saveTunnelProxy(_ profile: ProxyProfile, device: AndroidDevice) throws {
-        let previous = try savedProxy(serial: device.serial)
-        let reference = try profile.login.map(ProxyPasswords.save)
-        do {
-            try transaction {
-                try remember(device)
-                try execute("""
-                    INSERT INTO proxies(serial, host, port, mode, updated_at, username, credential_id, relay_directory, relay_port)
-                    VALUES(?, ?, ?, 'tunnel', ?, ?, ?, NULL, NULL)
-                    ON CONFLICT(serial) DO UPDATE SET
-                        host = excluded.host, port = excluded.port, mode = excluded.mode,
-                        updated_at = excluded.updated_at, username = excluded.username,
-                        credential_id = excluded.credential_id, relay_directory = NULL, relay_port = NULL
-                    """, [device.serial, profile.endpoint.host, String(profile.endpoint.port), now,
-                          profile.login?.username, reference])
-            }
-        } catch {
-            if let reference { ProxyPasswords.remove(reference) }
-            throw error
-        }
-        if let previous = previous?.credentialID { ProxyPasswords.remove(previous) }
-    }
-
-    func saveAuthenticatedProxy(_ profile: ProxyProfile, handle: AndroidProxyRelay.Handle, device: AndroidDevice) throws {
-        guard let login = profile.login else { return }
-        let previous = try savedProxy(serial: device.serial)
-        let reference = try ProxyPasswords.save(login)
-        do {
-            try transaction {
-                try remember(device)
-                try execute("""
-                    INSERT INTO proxies(serial, host, port, mode, updated_at, username, credential_id, relay_directory, relay_port)
-                    VALUES(?, ?, ?, 'authenticated', ?, ?, ?, ?, ?)
-                    ON CONFLICT(serial) DO UPDATE SET
-                        host = excluded.host, port = excluded.port, mode = excluded.mode,
-                        updated_at = excluded.updated_at, username = excluded.username,
-                        credential_id = excluded.credential_id, relay_directory = excluded.relay_directory,
-                        relay_port = excluded.relay_port
-                    """, [device.serial, profile.endpoint.host, String(profile.endpoint.port), now,
-                          login.username, reference, handle.directory, String(handle.endpoint.port)])
-            }
-        } catch {
-            ProxyPasswords.remove(reference)
-            throw error
-        }
-        if let previous = previous?.credentialID { ProxyPasswords.remove(previous) }
+    func removeProxy(device: AndroidDevice) throws {
+        try execute("""
+            UPDATE proxies SET mode = 'off', updated_at = ?, username = NULL, password = NULL,
+                credential_id = NULL, relay_directory = NULL, relay_port = NULL
+            WHERE serial = ?
+            """, [now, device.serial])
     }
 
     func startRun(device: AndroidDevice) throws -> String {

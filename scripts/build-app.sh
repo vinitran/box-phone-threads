@@ -30,7 +30,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$reader_dir"
 javac --release 8 -classpath "$android_jar" -d "$reader_dir" android/*.java
 "$d8" --min-api 24 --lib "$android_jar" --output "$reader_dir" \
     "$reader_dir"/AccessibilitySession*.class "$reader_dir"/KeyboardReader*.class "$reader_dir"/ThreadsReader*.class \
-    "$reader_dir"/ProxyRelay*.class "$reader_dir"/ProxyCheck.class "$reader_dir"/KeyboardTyper*.class
+    "$reader_dir"/ProxyCheck.class "$reader_dir"/KeyboardTyper*.class
 cp "$reader_dir/classes.dex" "$app/Contents/Resources/KeyboardReader.dex"
 
 # gnirehtet relay with Phone Farm's proxy support (gnirehtet-relay/), plus the official client APK.
