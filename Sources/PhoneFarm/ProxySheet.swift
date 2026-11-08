@@ -110,7 +110,7 @@ struct ProxySheet: View {
             try PhoneFarmStore.shared.get().removeProxy(device: device)
             onSaved()
             onApplied(nil)
-            report("Đã gỡ proxy · điện thoại dùng mạng của Mac qua cáp")
+            report("Đã gỡ proxy · máy bị khóa thao tác cho đến khi gắn proxy mới")
             dismiss()
         } catch {
             self.error = error.localizedDescription

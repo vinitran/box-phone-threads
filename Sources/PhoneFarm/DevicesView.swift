@@ -7,7 +7,6 @@ struct DevicesView: View {
     @ObservedObject var manager: DeviceManager
     @ObservedObject var updater: AppUpdater
     @State private var pendingUpdate: AppUpdater.Release?
-    @State private var proxyWarning: ProxyWarning?
     @State private var reportsUpdateFailure = false
     @State private var proxyDevice: AndroidDevice?
     @State private var threadsDevice: AndroidDevice?
@@ -20,15 +19,6 @@ struct DevicesView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-                .alert(proxyWarning.map { "\($0.device.name) chưa gắn proxy" } ?? "",
-                       isPresented: Binding(get: { proxyWarning != nil }, set: { if !$0 { proxyWarning = nil } }),
-                       presenting: proxyWarning) { warning in
-                    Button(warning.action.continueTitle) { perform(warning.action, on: warning.device) }
-                    Button("Gắn proxy…") { proxyDevice = warning.device }
-                    Button("Hủy", role: .cancel) {}
-                } message: { warning in
-                    Text("\(warning.device.serial) chưa có proxy đã lưu. Threads trên máy này sẽ dùng IP mạng hiện tại của điện thoại.")
-                }
             Divider()
             if let adbError = manager.adbError {
                 banner("Không đọc được danh sách thiết bị", details: adbError)
@@ -101,31 +91,6 @@ struct DevicesView: View {
             DeviceInfoSheet(device: device, manager: manager)
         }
         .sheet(isPresented: $showThreadsSettings) { ThreadsSettingsSheet() }
-    }
-
-    // MARK: Proxy check
-
-    struct ProxyWarning: Identifiable {
-        enum Action {
-            case threads, profile
-            var continueTitle: String { self == .threads ? "Vẫn chạy Threads" : "Vẫn đổi ảnh đại diện & bio" }
-        }
-        let device: AndroidDevice
-        let action: Action
-        var id: String { device.id }
-    }
-
-    /// Runs the action right away when the phone has a saved proxy, otherwise asks first.
-    private func checkProxy(_ device: AndroidDevice, _ action: ProxyWarning.Action) {
-        if manager.hasProxy(device) { perform(action, on: device) }
-        else { proxyWarning = ProxyWarning(device: device, action: action) }
-    }
-
-    private func perform(_ action: ProxyWarning.Action, on device: AndroidDevice) {
-        switch action {
-        case .threads: manager.runThreads(device)
-        case .profile: Task { await manager.autoUpdateProfile(device) }
-        }
     }
 
     // MARK: Header
@@ -361,8 +326,8 @@ struct DevicesView: View {
                                    openProfile: {
                                        Task { if await manager.openThreads(device) { profileDevice = device } }
                                    },
-                                   autoProfile: { checkProxy(device, .profile) },
-                                   runThreads: { checkProxy(device, .threads) },
+                                   autoProfile: { Task { await manager.autoUpdateProfile(device) } },
+                                   runThreads: { manager.runThreads(device) },
                                    openManual: {
                                        Task { if await manager.openThreads(device) { threadsDevice = device } }
                                    })
@@ -458,6 +423,8 @@ private struct DeviceCard: View {
     private var activity: DeviceManager.Activity? { manager.activities[device.id] }
     private var hasIssue: Bool { activity?.hasIssue == true && !isRunning }
     private var canUse: Bool { device.isReady && manager.adbError == nil }
+    /// Actions on the phone need its proxy; only Proxy, Info and renaming work without it.
+    private var canOperate: Bool { canUse && manager.isProxyReady(device) }
 
     private var tone: (label: String, color: Color) {
         if !device.isReady {
@@ -488,7 +455,7 @@ private struct DeviceCard: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .disabled(!canUse || isRunning || updatingProfile || manager.installingAPK.contains(device.id))
+            .disabled(!canOperate || isRunning || updatingProfile || manager.installingAPK.contains(device.id))
             .help("Tự động: AI tạo bio, chọn ngẫu nhiên một ảnh trong thư mục ảnh đại diện, rồi lưu cả hai trong Threads.")
         }
         .padding(14)
@@ -611,15 +578,17 @@ private struct DeviceCard: View {
 
     private var proxyRow: some View {
         HStack(spacing: 10) {
+            let blocked = device.isReady ? manager.proxyBlockReason(device) : nil
             Label {
-                Text(manager.proxyAddress(device) ?? "Chưa cấu hình proxy")
+                Text(manager.proxyAddress(device) ?? "Chưa gắn proxy · cần gắn để thao tác")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
             } icon: {
-                Image(systemName: "network")
+                Image(systemName: blocked == nil ? "network" : "lock.fill")
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(blocked == nil ? Color.secondary : Color.orange)
+            .help(blocked ?? "Đang ra internet qua proxy này")
 
             Spacer(minLength: 6)
 
@@ -650,7 +619,7 @@ private struct DeviceCard: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .disabled(!canUse || isRunning || installing)
+        .disabled(!canOperate || isRunning || installing)
         .help("Tải APK Gboard, Threads và Instagram (lần đầu, sau đó dùng lại trên Mac), kiểm tra SHA-256 rồi cài và đặt Gboard làm bàn phím mặc định. Máy đã có app cùng hoặc mới hơn sẽ được bỏ qua. Cần đủ ba app mới chạy được Threads.")
     }
 
@@ -753,18 +722,18 @@ private struct DeviceCard: View {
 
     private func tetherColor(_ state: DeviceManager.TetherState?) -> Color {
         switch state {
-        case .on(_, true): return .green
-        case .on(_, false), .failed: return .orange
+        case .on: return .green
+        case .needsProxy, .failed: return .orange
         default: return .secondary
         }
     }
 
     private func tetherHelp(_ state: DeviceManager.TetherState?) -> String {
         switch state {
-        case .on(let ip, true):
+        case .on(let ip):
             return "Internet qua cáp USB, đi qua proxy" + (ip.map { " · IP \($0)" } ?? "") + ". Wi-Fi và dữ liệu di động đã tắt. Bấm để nối lại."
-        case .on(let ip, false):
-            return "Internet qua cáp USB bằng mạng của Mac (chưa gắn proxy)" + (ip.map { " · IP \($0)" } ?? "") + ". Bấm Proxy để gắn proxy."
+        case .needsProxy:
+            return "Chưa gắn proxy nên máy không có internet qua cáp và mọi thao tác bị khóa. Bấm Proxy để gắn proxy."
         case .failed(let message):
             return "Chưa có internet qua cáp USB: \(message) Bấm để thử lại."
         default:
@@ -783,7 +752,7 @@ private struct DeviceCard: View {
                 .foregroundStyle(isOpen ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.borderless)
-        .disabled(isClosing || (!isOpen && (!canUse || !manager.scrcpyAvailable)))
+        .disabled(isClosing || (!isOpen && (!canOperate || !manager.scrcpyAvailable)))
         .help(isOpen ? "Đóng màn hình điện thoại" : "Mở màn hình điện thoại (scrcpy)")
         .accessibilityLabel(isOpen ? "Đóng màn hình" : "Mở màn hình")
     }
@@ -811,7 +780,7 @@ private struct DeviceCard: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("Tùy chọn Threads")
-            .disabled(!canUse || isRunning || manager.installingAPK.contains(device.id) || manager.updatingProfile.contains(device.id))
+            .disabled(!canOperate || isRunning || manager.installingAPK.contains(device.id) || manager.updatingProfile.contains(device.id))
 
             Spacer(minLength: 8)
 
@@ -837,7 +806,7 @@ private struct DeviceCard: View {
             }
             .disabled(!manager.hasRequiredApps(device))
             .buttonStyle(.borderedProminent)
-            .disabled(!canUse || isRunning)
+            .disabled(!canOperate || isRunning)
         }
     }
 }

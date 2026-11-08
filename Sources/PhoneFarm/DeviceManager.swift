@@ -18,8 +18,10 @@ final class DeviceManager: ObservableObject {
 
     enum TetherState: Equatable {
         case starting
-        /// ip: the address websites see; proxied: false when the phone has no proxy and uses the Mac's network.
-        case on(ip: String?, proxied: Bool)
+        /// Online through the phone's proxy; ip is the address websites see.
+        case on(ip: String?)
+        /// No proxy saved: the phone gets no internet and no action runs on it.
+        case needsProxy
         case failed(String)
     }
     /// Internet over the USB cable per connected phone, started automatically on connect.
@@ -178,9 +180,6 @@ final class DeviceManager: ObservableObject {
         }
     }
 
-    /// True when the phone's identity file or the Mac's database has a proxy for it.
-    func hasProxy(_ device: AndroidDevice) -> Bool { proxyAddress(device) != nil }
-
     /// The phone's own proxy comes first, so a phone keeps its proxy on another Mac.
     func proxyAddress(_ device: AndroidDevice) -> String? {
         if let address = identities[device.id]?.proxyAddress { return address }
@@ -214,8 +213,14 @@ final class DeviceManager: ObservableObject {
         // Re-read the phone's file, which may have a newer proxy than the one loaded on connect.
         await loadIdentity(device)
         do {
-            let proxy = try tunnelProxy(device)
-            USBTether.log(device.serial, "proxy " + (proxy?.endpoint.address ?? "none"))
+            guard let proxy = try tunnelProxy(device) else {
+                // Phones never go online through the Mac's own network.
+                relays.removeValue(forKey: device.id)?.stop()
+                USBTether.log(device.serial, "no proxy")
+                tether[device.id] = .needsProxy
+                return
+            }
+            USBTether.log(device.serial, "proxy " + proxy.endpoint.address)
             let port = relayPort(device)
             relays.removeValue(forKey: device.id)?.stop()
             // Let the old relay release the port before the new one listens on it.
@@ -226,13 +231,13 @@ final class DeviceManager: ObservableObject {
             try await Task.sleep(for: .milliseconds(300))
             try await USBTether.connect(serial: device.serial, tools: tools, adb: adb, port: port)
             guard relays[device.id] === relay else { return }
-            tether[device.id] = .on(ip: nil, proxied: proxy != nil)
+            tether[device.id] = .on(ip: nil)
             let ip = await USBTether.publicIP(adb: adb, serial: device.serial)
             guard relays[device.id] === relay else { return }
             USBTether.log(device.serial, "connected, ip " + (ip ?? "unknown"))
             tether[device.id] = ip == nil
-                ? .failed("Đã bật VPN qua cáp nhưng điện thoại chưa ra được internet" + (proxy == nil ? "." : " qua proxy \(proxy!.endpoint.address). Kiểm tra proxy."))
-                : .on(ip: ip, proxied: proxy != nil)
+                ? .failed("Đã bật VPN qua cáp nhưng điện thoại chưa ra được internet qua proxy \(proxy.endpoint.address). Kiểm tra proxy.")
+                : .on(ip: ip)
         } catch {
             USBTether.log(device.serial, "failed: " + error.localizedDescription)
             tether[device.id] = .failed(error.localizedDescription)
@@ -257,8 +262,26 @@ final class DeviceManager: ObservableObject {
         }
     }
 
-    func isTetherReady(_ device: AndroidDevice) -> Bool {
+    /// Every action on a phone needs its proxy: the USB tunnel must be up through it.
+    func isProxyReady(_ device: AndroidDevice) -> Bool {
         if case .on = tether[device.id] { return true }
+        return false
+    }
+
+    /// Why actions are locked on this phone, or nil when its proxy is ready.
+    func proxyBlockReason(_ device: AndroidDevice) -> String? {
+        switch tether[device.id] {
+        case .on: return nil
+        case .starting: return "Đang nối internet qua cáp USB và proxy. Chờ biểu tượng cáp chuyển xanh."
+        case .failed(let message): return "Chưa có internet qua proxy: \(message)"
+        case .needsProxy, nil: return "Máy chưa gắn proxy. Bấm Proxy để gắn proxy trước khi thao tác."
+        }
+    }
+
+    /// Shows why the action cannot run and returns false when the phone's proxy is not ready.
+    private func requireProxy(_ device: AndroidDevice) -> Bool {
+        guard let reason = proxyBlockReason(device) else { return true }
+        actionError = ActionError(title: "\(displayName(device)): cần proxy", details: reason)
         return false
     }
 
@@ -320,7 +343,7 @@ final class DeviceManager: ObservableObject {
     }
 
     func open(_ device: AndroidDevice) {
-        guard device.isReady, adbError == nil, sessions[device.id] == nil else { return }
+        guard device.isReady, adbError == nil, sessions[device.id] == nil, requireProxy(device) else { return }
         guard let adb = ToolPaths.adb(), let scrcpy = ToolPaths.scrcpy() else {
             actionError = ActionError(title: "Không thể chạy scrcpy cho \(device.name)",
                                       details: "Cần cài ADB và scrcpy để mở cửa sổ điều khiển.")
@@ -352,7 +375,7 @@ final class DeviceManager: ObservableObject {
     }
 
     func openThreads(_ device: AndroidDevice) async -> Bool {
-        guard device.isReady, adbError == nil, runningThreads.insert(device.id).inserted else { return false }
+        guard device.isReady, adbError == nil, requireProxy(device), runningThreads.insert(device.id).inserted else { return false }
         defer { runningThreads.remove(device.id) }
         activities[device.id] = Activity(progress: DeviceProgress(message: "Đang mở Threads"), startedAt: Date())
         do {
@@ -412,7 +435,7 @@ final class DeviceManager: ObservableObject {
 
     /// Installs Threads and Instagram from the APKs hosted on R2 (cached on the Mac).
     func installBundledApps(_ device: AndroidDevice) async {
-        guard device.isReady, adbError == nil, !runningThreads.contains(device.id),
+        guard device.isReady, adbError == nil, !runningThreads.contains(device.id), requireProxy(device),
               installingAPK.insert(device.id).inserted else { return }
         defer { installingAPK.remove(device.id) }
         guard let adb = ToolPaths.adb() else { return }
@@ -432,7 +455,7 @@ final class DeviceManager: ObservableObject {
 
     /// One click: AI bio plus a random avatar, saved in Threads without further confirmation.
     func autoUpdateProfile(_ device: AndroidDevice) async {
-        guard device.isReady, adbError == nil, !runningThreads.contains(device.id),
+        guard device.isReady, adbError == nil, !runningThreads.contains(device.id), requireProxy(device),
               updatingProfile.insert(device.id).inserted else { return }
         defer { updatingProfile.remove(device.id) }
         guard let key = ThreadsKey.load() else {
@@ -453,7 +476,7 @@ final class DeviceManager: ObservableObject {
     }
 
     func installAPK(_ device: AndroidDevice, files: [URL]) async {
-        guard device.isReady, adbError == nil, !files.isEmpty, !runningThreads.contains(device.id),
+        guard device.isReady, adbError == nil, !files.isEmpty, !runningThreads.contains(device.id), requireProxy(device),
               installingAPK.insert(device.id).inserted else { return }
         defer { installingAPK.remove(device.id) }
         guard let adb = ToolPaths.adb() else {
@@ -485,6 +508,7 @@ final class DeviceManager: ObservableObject {
     func hasRequiredApps(_ device: AndroidDevice) -> Bool { missingApps[device.id]?.isEmpty == true }
 
     func runThreads(_ device: AndroidDevice) {
+        guard requireProxy(device) else { return }
         guard hasRequiredApps(device) else {
             let missing = missingApps[device.id].map { $0.map(\.name).joined(separator: ", ") } ?? "chưa kiểm tra"
             actionError = ActionError(title: "Chưa chạy được Threads trên \(device.name)",
@@ -524,6 +548,9 @@ final class DeviceManager: ObservableObject {
                 try Task.checkCancellation()
                 guard self.devices.contains(where: { $0.serial == device.serial && $0.isReady }) else {
                     throw ThreadsLaunchError(errorDescription: "Điện thoại đã ngắt kết nối. Chu kỳ đã dừng.")
+                }
+                if let reason = self.proxyBlockReason(device) {
+                    throw ThreadsLaunchError(errorDescription: reason + " Chu kỳ đã dừng.")
                 }
                 let runID = try storage.startRun(device: device)
                 let prefix = "Chu kỳ \(cycle) · Lượt \(ordinal)/10 · "
