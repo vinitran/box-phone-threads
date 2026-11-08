@@ -488,6 +488,15 @@ final class DeviceManager: ObservableObject {
             throw ThreadsLaunchError(errorDescription: "Không tìm thấy ADB.")
         }
         let shell = ["-s", device.serial, "shell"]
+        // Android does not resume Threads while the screen is off, so `am start -W` hangs until the
+        // timeout. Keep the screen on while plugged in, wake it and dismiss a non-secure lock screen.
+        _ = await (try? RunningCommand(adb, arguments: shell + [
+            "settings put global stay_on_while_plugged_in 7; input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard"
+        ]))?.result(timeout: 10)
+        let power = await (try? RunningCommand(adb, arguments: shell + ["dumpsys", "power"]))?.result(timeout: 10)
+        if let power, power.output.contains("mWakefulness="), !power.output.contains("mWakefulness=Awake") {
+            throw ThreadsLaunchError(errorDescription: "Màn hình điện thoại đang tắt và không bật lên được. Hãy bật màn hình.")
+        }
         // Close the notification shade if someone left it open; it covers Threads and the keyboard.
         _ = await (try? RunningCommand(adb, arguments: shell + ["cmd", "statusbar", "collapse"]))?.result(timeout: 8)
         let package = "com.instagram.barcelona"
@@ -508,10 +517,17 @@ final class DeviceManager: ObservableObject {
         let command = try RunningCommand(adb, arguments: shell + [
             "am", "start", "-W", "--user", "current"
         ] + launcher + ["-n", quotedComponent])
-        let result = await command.result(timeout: 15)
-        guard result.status == 0, result.output.split(whereSeparator: \.isNewline).contains("Status: ok") else {
-            let details = result.diagnostics.isEmpty ? "Android không xác nhận đã mở Threads." : result.diagnostics
-            throw ThreadsLaunchError(errorDescription: details)
+        let result = await command.result(timeout: 20)
+        if result.status == 0, result.output.split(whereSeparator: \.isNewline).contains("Status: ok") {
+            return adb
+        }
+        // `am start -W` can time out on a slow phone even though Threads did open.
+        let activities = await (try? RunningCommand(adb, arguments: shell + ["dumpsys", "activity", "activities"]))?
+            .result(timeout: 10, outputLimit: 512_000)
+        let resumed = activities?.output.split(whereSeparator: \.isNewline)
+            .contains { $0.contains("ResumedActivity") && $0.contains(package + "/") } ?? false
+        guard resumed else {
+            throw ThreadsLaunchError(errorDescription: "Android chưa mở được Threads sau 20 giây. Hãy kiểm tra màn hình điện thoại đang bật và không bị khoá.")
         }
         return adb
     }
