@@ -498,10 +498,33 @@ final class DeviceManager: ObservableObject {
 
     func canStopThreads(_ device: AndroidDevice) -> Bool { threadsTasks[device.id] != nil }
 
+    /// Stops the cycle and closes Threads on the phone completely (force-stop).
     func stopThreads(_ device: AndroidDevice) {
-        threadsTasks[device.id]?.cancel()
+        let task = threadsTasks[device.id]
+        task?.cancel()
         nextThreadsRun.removeValue(forKey: device.id)
-        updateThreadsActivity(device, progress: DeviceProgress(message: "Đang dừng chu kỳ Threads…"))
+        updateThreadsActivity(device, progress: DeviceProgress(message: "Đang dừng chu kỳ và tắt Threads…"))
+        Task {
+            await forceStopThreads(device)
+            // Again once the cycle has unwound, in case a step reopened Threads meanwhile.
+            await task?.value
+            let closed = await forceStopThreads(device)
+            reportActivity(device, progress: DeviceProgress(message: closed ? "Đã dừng chu kỳ và tắt Threads."
+                                                                            : "Đã dừng chu kỳ nhưng chưa tắt được Threads trên điện thoại."),
+                           hasIssue: !closed)
+        }
+    }
+
+    /// Ends this phone's helper processes first: the typing helper keeps running after its task is
+    /// cancelled and, once Threads is gone, its key taps would land on the home screen.
+    @discardableResult
+    private func forceStopThreads(_ device: AndroidDevice) async -> Bool {
+        let script = "pkill -f 'app_process /system/bin (KeyboardReader|ThreadsReader)'; "
+            + "am force-stop --user current com.instagram.barcelona"
+        guard let adb = ToolPaths.adb(),
+              let command = try? RunningCommand(adb, arguments: ["-s", device.serial, "shell", script])
+        else { return false }
+        return await command.result(timeout: 10).status == 0
     }
 
     /// Threads may only run after the phone was checked and has Gboard, Threads and Instagram.
