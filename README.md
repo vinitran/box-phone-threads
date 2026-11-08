@@ -4,7 +4,7 @@
 
 ## Cài đặt và chạy
 
-Cần macOS 13 trở lên, Swift 5.9 trở lên, JDK 11 trở lên và Android SDK có Platform API 24 trở lên cùng Build Tools để build. Khi chạy app, cần ADB và scrcpy để điều khiển thiết bị. Có thể cài hai công cụ này bằng Homebrew.
+Cần macOS 13 trở lên, Swift 5.9 trở lên, Rust (`brew install rust`, để build relay gnirehtet), JDK 11 trở lên và Android SDK có Platform API 24 trở lên cùng Build Tools để build. Khi chạy app, cần ADB và scrcpy để điều khiển thiết bị. Có thể cài hai công cụ này bằng Homebrew.
 
 ```sh
 brew install scrcpy
@@ -104,13 +104,22 @@ Mỗi điện thoại có thể lưu file `/sdcard/PhoneFarm/device.json` gồm 
 
 Vì file nằm trên chính điện thoại, cắm sang Mac khác vẫn nhận ra máy: nếu file có proxy, Phone Farm dùng proxy đó trước proxy lưu trên Mac (hiển thị trên thẻ, điền sẵn trong cửa sổ Proxy, dùng cho cảnh báo chưa gắn proxy). Mật khẩu proxy trong file ở dạng chữ thường, ai đọc được bộ nhớ điện thoại đều xem được.
 
-## Proxy trên Android
+## Internet qua cáp USB và proxy
 
-Phone Farm lưu thiết bị, proxy gần nhất theo serial, kết quả phiên Threads và dấu vết chống bình luận lặp vào SQLite tại `~/Library/Application Support/Phone Farm/phone-farm.sqlite3`. Bấm **Thông tin** để xem dữ liệu thiết bị và hai mươi phiên Threads gần đây. Thiết bị đã lưu tiếp tục xuất hiện với trạng thái ngoại tuyến khi ngắt kết nối. Khóa AI không lưu trong SQLite.
+Điện thoại chỉ lên internet qua cáp USB và qua proxy của chính máy đó, không dùng Wi-Fi hay SIM. Khi một máy kết nối, Phone Farm tự:
 
-Bấm **Proxy** khi cần cấu hình. Cửa sổ có một ô nhập `host:port:user:pass` hoặc `host:port` và tự điền lại proxy đã lưu. Bấm **Áp dụng** để kiểm tra kết nối HTTPS và thông tin đăng nhập từ điện thoại, sau đó áp dụng và lưu. Cửa sổ đóng khi thành công, dòng thiết bị hiển thị IP kết nối. SQLite lưu địa chỉ, tài khoản và tham chiếu mật khẩu trong Keychain.
+1. Cài app VPN [gnirehtet](https://github.com/Genymobile/gnirehtet) nếu máy chưa có (APK đóng gói sẵn trong app) và cấp sẵn quyền VPN bằng `appops`, không cần bấm OK trên điện thoại.
+2. Chạy trên Mac một relay riêng cho máy đó (cổng 31420, 31421, …). Toàn bộ lưu lượng của điện thoại đi qua cáp về relay. Relay mở mỗi kết nối TCP qua proxy của máy bằng HTTP `CONNECT` (có `Proxy-Authorization` khi proxy có tài khoản), nên website và Threads thấy IP của proxy. UDP bị chặn, trừ DNS (cổng 53) và NTP (cổng 123), vì proxy HTTP không chở được UDP; QUIC bị chặn nên app tự chuyển sang TCP qua proxy. Truy vấn DNS qua UDP đi thẳng từ Mac tới 8.8.8.8/1.1.1.1.
+3. Tắt Wi-Fi và dữ liệu di động (`svc wifi disable`, `svc data disable`), xóa proxy hệ thống cũ và dừng cầu nối proxy cũ trên điện thoại.
+4. Kiểm tra IP ra internet ngay trên điện thoại.
 
-Cầu nối xác thực tiếp tục chạy trên điện thoại khi đóng app trên Mac. Sau khi khởi động lại Android, bấm **Proxy** và **Áp dụng** để tạo lại cầu nối. Dùng **Gỡ proxy** để xóa cấu hình proxy HTTP toàn thiết bị và dừng cầu nối. Một số ứng dụng có thể bỏ qua proxy hệ thống.
+Relay là bản gnirehtet 2.5.1 có thêm phần proxy, nằm trong thư mục `gnirehtet-relay/` (giấy phép Apache 2.0, phần thêm ở `src/relay/upstream_proxy.rs`).
+
+Biểu tượng cáp trên thẻ máy hiển thị trạng thái. Màu xanh: đang qua proxy (rê chuột để xem IP). Màu cam: lỗi, hoặc máy chưa có proxy nên đang dùng mạng của Mac. Bấm biểu tượng để nối lại. Khi thoát Phone Farm hoặc rút cáp, điện thoại không còn internet vì Wi-Fi và SIM đã tắt; mở lại app hoặc cắm lại cáp là tự nối lại. Muốn dùng Wi-Fi, bật lại trong Cài đặt của điện thoại.
+
+Bấm **Proxy** để gắn proxy. Cửa sổ có một ô nhập `host:port:user:pass` hoặc `host:port` và tự điền lại proxy đã lưu. **Áp dụng** kiểm tra proxy từ Mac (HTTPS qua `CONNECT`, đúng cách relay dùng), lưu proxy rồi nối lại internet của điện thoại qua proxy mới. **Gỡ proxy** xóa proxy; điện thoại vẫn lên internet qua cáp nhưng bằng mạng của Mac.
+
+Phone Farm lưu thiết bị, proxy gần nhất theo serial, kết quả phiên Threads và dấu vết chống bình luận lặp vào SQLite tại `~/Library/Application Support/Phone Farm/phone-farm.sqlite3`. SQLite lưu địa chỉ và tài khoản proxy, mật khẩu nằm trong Keychain. Bấm **Thông tin** để xem dữ liệu thiết bị và hai mươi phiên Threads gần đây. Thiết bị đã lưu tiếp tục xuất hiện với trạng thái ngoại tuyến khi ngắt kết nối. Khóa AI không lưu trong SQLite.
 
 ## Bàn phím Telex cho Threads
 

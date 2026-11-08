@@ -15,6 +15,17 @@ final class DeviceManager: ObservableObject {
     /// Identity files read from each phone (/sdcard/PhoneFarm/device.json), kept while offline.
     @Published private(set) var identities: [String: DeviceIdentity] = [:]
     private var identitiesChecked: Set<String> = []
+
+    enum TetherState: Equatable {
+        case starting
+        /// ip: the address websites see; proxied: false when the phone has no proxy and uses the Mac's network.
+        case on(ip: String?, proxied: Bool)
+        case failed(String)
+    }
+    /// Internet over the USB cable per connected phone, started automatically on connect.
+    @Published private(set) var tether: [String: TetherState] = [:]
+    private var relays: [String: RunningCommand] = [:]
+    private var relayPorts: [String: Int] = [:]
     /// Required apps (Gboard, Threads, Instagram) missing on each connected phone, checked once per connection.
     /// An empty list means the phone was checked and has all of them; no entry means not checked yet.
     @Published private(set) var missingApps: [String: [AppBundles.App]] = [:]
@@ -172,7 +183,92 @@ final class DeviceManager: ObservableObject {
 
     /// The phone's own proxy comes first, so a phone keeps its proxy on another Mac.
     func proxyAddress(_ device: AndroidDevice) -> String? {
-        identities[device.id]?.proxyAddress ?? savedProxies[device.id]?.endpoint?.address
+        if let address = identities[device.id]?.proxyAddress { return address }
+        guard let saved = savedProxies[device.id], saved.mode != "off", saved.mode != "unsupported" else { return nil }
+        return saved.endpoint?.address
+    }
+
+    /// The proxy the phone's USB tunnel goes through, with its login.
+    func tunnelProxy(_ device: AndroidDevice, interactive: Bool = false) throws -> ProxyProfile? {
+        if let line = identities[device.id]?.proxy, let profile = ProxyProfile(line: line) { return profile }
+        guard let saved = savedProxies[device.id], saved.mode != "off", saved.mode != "unsupported",
+              let endpoint = saved.endpoint else { return nil }
+        guard let reference = saved.credentialID else {
+            return ProxyProfile(host: endpoint.host, port: String(endpoint.port))
+        }
+        let login = try ProxyPasswords.load(reference, interactive: interactive)
+        return ProxyProfile(host: endpoint.host, port: String(endpoint.port),
+                            username: login.username, password: login.password)
+    }
+
+    // MARK: Internet over USB through the phone's proxy
+
+    /// (Re)starts the phone's relay with its current proxy and brings up its VPN. Also used after
+    /// the proxy changes: the phone's tunnel reconnects to the new relay by itself.
+    func startTether(_ device: AndroidDevice) async {
+        guard device.isReady, tether[device.id] != .starting, let adb = ToolPaths.adb() else { return }
+        guard let tools = USBTether.Tools.bundled else {
+            tether[device.id] = .failed("Bản Phone Farm này thiếu gnirehtet. Hãy cập nhật app.")
+            return
+        }
+        tether[device.id] = .starting
+        USBTether.log(device.serial, "start")
+        // Re-read the phone's file, which may have a newer proxy than the one loaded on connect.
+        await loadIdentity(device)
+        do {
+            let proxy: ProxyProfile?
+            do {
+                proxy = try tunnelProxy(device)
+            } catch {
+                // Saved by another build: ask macOS once, then keep the proxy in the phone's own file.
+                proxy = try tunnelProxy(device, interactive: true)
+                if let proxy { await recordProxy(device, line: proxy.line) }
+            }
+            USBTether.log(device.serial, "proxy " + (proxy?.endpoint.address ?? "none"))
+            let port = relayPort(device)
+            relays.removeValue(forKey: device.id)?.stop()
+            // Let the old relay release the port before the new one listens on it.
+            try await Task.sleep(for: .milliseconds(400))
+            let relay = try USBTether.startRelay(tools: tools, adb: adb, port: port, proxy: proxy)
+            relays[device.id] = relay
+            watch(relay, device)
+            try await Task.sleep(for: .milliseconds(300))
+            try await USBTether.connect(serial: device.serial, tools: tools, adb: adb, port: port)
+            guard relays[device.id] === relay else { return }
+            tether[device.id] = .on(ip: nil, proxied: proxy != nil)
+            let ip = await USBTether.publicIP(adb: adb, serial: device.serial)
+            guard relays[device.id] === relay else { return }
+            USBTether.log(device.serial, "connected, ip " + (ip ?? "unknown"))
+            tether[device.id] = ip == nil
+                ? .failed("Đã bật VPN qua cáp nhưng điện thoại chưa ra được internet" + (proxy == nil ? "." : " qua proxy \(proxy!.endpoint.address). Kiểm tra proxy."))
+                : .on(ip: ip, proxied: proxy != nil)
+        } catch {
+            USBTether.log(device.serial, "failed: " + error.localizedDescription)
+            tether[device.id] = .failed(error.localizedDescription)
+        }
+    }
+
+    private func relayPort(_ device: AndroidDevice) -> Int {
+        if let port = relayPorts[device.id] { return port }
+        let port = USBTether.firstPort + relayPorts.count
+        relayPorts[device.id] = port
+        return port
+    }
+
+    private func watch(_ relay: RunningCommand, _ device: AndroidDevice) {
+        Task {
+            let result = await relay.result(outputLimit: 16_000)
+            USBTether.log(device.serial, "relay exited \(result.status): " + result.diagnostics)
+            guard relays[device.id] === relay else { return }
+            relays.removeValue(forKey: device.id)
+            let reason = result.status == 3 ? "Không phân giải được địa chỉ proxy." : result.diagnostics
+            tether[device.id] = .failed("Relay trên Mac đã dừng. " + reason)
+        }
+    }
+
+    func isTetherReady(_ device: AndroidDevice) -> Bool {
+        if case .on = tether[device.id] { return true }
+        return false
     }
 
     // MARK: Identity file on the phone
@@ -187,7 +283,15 @@ final class DeviceManager: ObservableObject {
         identitiesChecked.formIntersection(ready)
         for device in devices where device.isReady && !identitiesChecked.contains(device.id) {
             identitiesChecked.insert(device.id)
-            Task { await loadIdentity(device) }
+            Task {
+                await loadIdentity(device)
+                // The phone's own proxy is read first, so the tunnel starts with the right one.
+                await startTether(device)
+            }
+        }
+        for id in relays.keys where !ready.contains(id) {
+            relays.removeValue(forKey: id)?.stop()
+            tether.removeValue(forKey: id)
         }
     }
 
@@ -538,6 +642,9 @@ final class DeviceManager: ObservableObject {
     }
 
     func stopAll() {
+        // Phones keep Wi-Fi and data off: without Phone Farm they stay offline rather than leave without the proxy.
+        for relay in relays.values { relay.stop() }
+        relays.removeAll()
         for task in threadsTasks.values { task.cancel() }
         for task in photoCleanupTasks.values { task.cancel() }
         for command in sessions.values {

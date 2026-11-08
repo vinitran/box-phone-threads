@@ -20,12 +20,14 @@ enum ProxyPasswords {
         return reference
     }
 
-    static func load(_ reference: String) throws -> ProxyLogin {
+    /// `interactive` lets macOS ask for the Mac's password when the item was saved by another build
+    /// of Phone Farm (release builds are signed ad hoc, so each one is a different app to the Keychain).
+    static func load(_ reference: String, interactive: Bool = false) throws -> ProxyLogin {
         var item = query(reference)
         item[kSecReturnData as String] = true
         var allowed = DarwinBoolean(false)
         guard SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess,
-              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else { throw PasswordError() }
+              SecKeychainSetUserInteractionAllowed(interactive) == errSecSuccess else { throw PasswordError() }
         defer { SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
         var value: CFTypeRef?
         guard SecItemCopyMatching(item as CFDictionary, &value) == errSecSuccess,

@@ -79,94 +79,43 @@ struct ProxySheet: View {
         onActivity(message)
     }
 
+    /// Checks the proxy from the Mac, saves it on the Mac and on the phone; the phone's USB tunnel
+    /// then restarts through it (onApplied).
     private func apply() async {
         guard !isWorking else { return }
         guard let profile = ProxyProfile(line: input) else {
             error = "Nhập proxy dạng host:port:user:pass hoặc host:port."
             return
         }
-        guard let adb = ToolPaths.adb() else { error = ProxyError.noADB.localizedDescription; return }
         isWorking = true
         error = nil
         defer { isWorking = false }
-        let proxy = AndroidProxy(adb: adb, serial: device.serial)
-        let relay = AndroidProxyRelay(adb: adb, serial: device.serial)
-        var created: AndroidProxyRelay.Handle?
-        var previous: ProxyConfiguration?
-        var target: ProxyConfiguration?
-        var applying = false
         do {
-            let store = try PhoneFarmStore.shared.get()
-            let oldSaved = try store.savedProxy(serial: device.serial)
-            let before = try await proxy.configuration()
-            previous = before
-            guard before.address != nil else { throw ProxyError.changed }
-            report("Đang xác thực proxy")
-            let endpoint: ProxyEndpoint
-            if profile.login != nil {
-                let handle = try await relay.start(profile)
-                created = handle
-                endpoint = handle.endpoint
-            } else {
-                endpoint = profile.endpoint
-            }
-            let ip = try await proxy.validate(endpoint)
-            let configuration = ProxyConfiguration.direct(endpoint)
-            target = configuration
-            report("Đang áp dụng và lưu proxy")
-            applying = true
-            try await proxy.apply(configuration, replacing: before)
-            do {
-                if let created { try store.saveAuthenticatedProxy(profile, handle: created, device: device) }
-                else { try store.saveProxy(configuration, device: device) }
-            } catch {
-                try await proxy.apply(before, replacing: configuration)
-                applying = false
-                throw error
-            }
+            report("Đang kiểm tra proxy")
+            let ip = try await ProxyTester.publicIP(through: profile)
+            report("Đang lưu proxy")
+            try PhoneFarmStore.shared.get().saveTunnelProxy(profile, device: device)
             onSaved()
             onApplied(input.trimmingCharacters(in: .whitespacesAndNewlines))
-            if let oldDirectory = oldSaved?.relayDirectory, oldDirectory != created?.directory {
-                try? await relay.stop(directory: oldDirectory)
-            }
-            report("Proxy đã áp dụng · \(profile.endpoint.address) · IP \(ip)")
+            report("Proxy đã lưu · \(profile.endpoint.address) · IP \(ip) · đang nối lại internet qua cáp")
             dismiss()
         } catch {
-            var canStop = !applying
-            if applying, let target, let previous {
-                do {
-                    let current = try await proxy.configuration()
-                    if current == target { try await proxy.apply(previous, replacing: target) }
-                    canStop = true
-                } catch {
-                    canStop = false
-                }
-            }
-            if canStop, let created { try? await relay.stop(directory: created.directory) }
             self.error = error.localizedDescription
             report("Chưa áp dụng được proxy · " + error.localizedDescription)
         }
     }
 
     private func remove() async {
-        guard !isWorking, let adb = ToolPaths.adb() else { return }
+        guard !isWorking else { return }
         isWorking = true
         error = nil
         defer { isWorking = false }
         do {
-            let proxy = AndroidProxy(adb: adb, serial: device.serial)
-            let store = try PhoneFarmStore.shared.get()
-            let saved = try store.savedProxy(serial: device.serial)
-            let previous = try await proxy.configuration()
             report("Đang gỡ proxy")
-            try await proxy.apply(.off, replacing: previous)
-            try store.saveProxy(.off, device: device)
-            if let directory = saved?.relayDirectory {
-                try? await AndroidProxyRelay(adb: adb, serial: device.serial).stop(directory: directory)
-            }
+            try PhoneFarmStore.shared.get().saveProxy(.off, device: device)
             onSaved()
             onApplied(nil)
-            report("Đã gỡ proxy")
+            report("Đã gỡ proxy · điện thoại dùng mạng của Mac qua cáp")
             dismiss()
         } catch {
             self.error = error.localizedDescription

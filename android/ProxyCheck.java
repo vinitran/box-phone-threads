@@ -14,8 +14,10 @@ public final class ProxyCheck {
         HttpURLConnection connection = null;
         JSONObject result = new JSONObject();
         try {
-            Proxy proxy = new Proxy(Proxy.Type.HTTP,
-                new InetSocketAddress(request.getString("host"), request.getInt("port")));
+            // Without a host, check the phone's own route to the internet (the USB tunnel).
+            Proxy proxy = request.has("host")
+                ? new Proxy(Proxy.Type.HTTP, new InetSocketAddress(request.getString("host"), request.getInt("port")))
+                : Proxy.NO_PROXY;
             connection = (HttpURLConnection) new URL("https://api.ipify.org?format=json").openConnection(proxy);
             connection.setConnectTimeout(10_000);
             connection.setReadTimeout(10_000);

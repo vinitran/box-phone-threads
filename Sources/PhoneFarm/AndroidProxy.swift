@@ -18,6 +18,12 @@ struct ProxyProfile {
         login = username.isEmpty ? nil : ProxyLogin(username: username, password: password)
     }
 
+    /// host:port or host:port:user:pass, the format of the Proxy window and the phone's file.
+    var line: String {
+        guard let login else { return endpoint.address }
+        return endpoint.address + ":" + login.username + ":" + login.password
+    }
+
     init?(line: String) {
         let parts = line.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: ":", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)

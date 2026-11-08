@@ -67,6 +67,11 @@ jobs:
           java -version
           ls "$sdk/platforms" "$sdk/build-tools"
 
+      - name: Ensure Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo --version
+
       - name: Build Phone Farm.app (universal)
         env:
           PHONE_FARM_UNIVERSAL: "1"
@@ -79,6 +84,8 @@ jobs:
           app=".build/Phone Farm.app"
           lipo -info "$app/Contents/MacOS/PhoneFarm"
           test -f "$app/Contents/Resources/KeyboardReader.dex"
+          lipo -info "$app/Contents/Resources/gnirehtet/gnirehtet"
+          test -f "$app/Contents/Resources/gnirehtet/gnirehtet.apk"
           test -f "$app/Contents/Resources/ai-key.enc.json"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist"
           codesign --verify --deep --strict "$app"

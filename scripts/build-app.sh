@@ -32,6 +32,26 @@ javac --release 8 -classpath "$android_jar" -d "$reader_dir" android/*.java
     "$reader_dir"/AccessibilitySession*.class "$reader_dir"/KeyboardReader*.class "$reader_dir"/ThreadsReader*.class \
     "$reader_dir"/ProxyRelay*.class "$reader_dir"/ProxyCheck.class "$reader_dir"/KeyboardTyper*.class
 cp "$reader_dir/classes.dex" "$app/Contents/Resources/KeyboardReader.dex"
+
+# gnirehtet relay with Phone Farm's proxy support (gnirehtet-relay/), plus the official client APK.
+if ! command -v cargo >/dev/null; then
+    printf '%s\n' "Cần Rust (cargo) để build relay gnirehtet: brew install rust" >&2
+    exit 1
+fi
+tether_dir="$app/Contents/Resources/gnirehtet"
+mkdir -p "$tether_dir"
+if [[ "${PHONE_FARM_UNIVERSAL:-}" == "1" ]]; then
+    relays=()
+    for target in aarch64-apple-darwin x86_64-apple-darwin; do
+        cargo build --release --locked --manifest-path gnirehtet-relay/Cargo.toml --target "$target"
+        relays+=("gnirehtet-relay/target/$target/release/gnirehtet")
+    done
+    lipo -create "${relays[@]}" -output "$tether_dir/gnirehtet"
+else
+    cargo build --release --locked --manifest-path gnirehtet-relay/Cargo.toml
+    cp gnirehtet-relay/target/release/gnirehtet "$tether_dir/gnirehtet"
+fi
+cp Resources/gnirehtet/gnirehtet.apk Resources/gnirehtet/LICENSE "$tether_dir/"
 # Replace the executable with a new file so a running Phone Farm keeps its old binary intact.
 cp "$binary_dir/PhoneFarm" "$app/Contents/MacOS/PhoneFarm.new"
 mv -f "$app/Contents/MacOS/PhoneFarm.new" "$app/Contents/MacOS/PhoneFarm"

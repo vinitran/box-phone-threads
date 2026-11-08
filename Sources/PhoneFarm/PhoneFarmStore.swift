@@ -290,6 +290,30 @@ final class PhoneFarmStore {
         if mode == "direct", let reference = previous?.credentialID { ProxyPasswords.remove(reference) }
     }
 
+    /// Saves the proxy the phone's USB tunnel goes through; its password stays in the Keychain.
+    func saveTunnelProxy(_ profile: ProxyProfile, device: AndroidDevice) throws {
+        let previous = try savedProxy(serial: device.serial)
+        let reference = try profile.login.map(ProxyPasswords.save)
+        do {
+            try transaction {
+                try remember(device)
+                try execute("""
+                    INSERT INTO proxies(serial, host, port, mode, updated_at, username, credential_id, relay_directory, relay_port)
+                    VALUES(?, ?, ?, 'tunnel', ?, ?, ?, NULL, NULL)
+                    ON CONFLICT(serial) DO UPDATE SET
+                        host = excluded.host, port = excluded.port, mode = excluded.mode,
+                        updated_at = excluded.updated_at, username = excluded.username,
+                        credential_id = excluded.credential_id, relay_directory = NULL, relay_port = NULL
+                    """, [device.serial, profile.endpoint.host, String(profile.endpoint.port), now,
+                          profile.login?.username, reference])
+            }
+        } catch {
+            if let reference { ProxyPasswords.remove(reference) }
+            throw error
+        }
+        if let previous = previous?.credentialID { ProxyPasswords.remove(previous) }
+    }
+
     func saveAuthenticatedProxy(_ profile: ProxyProfile, handle: AndroidProxyRelay.Handle, device: AndroidDevice) throws {
         guard let login = profile.login else { return }
         let previous = try savedProxy(serial: device.serial)

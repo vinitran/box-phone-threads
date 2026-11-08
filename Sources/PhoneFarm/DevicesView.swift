@@ -85,7 +85,10 @@ struct DevicesView: View {
                 do { try manager.reloadSavedProxies() }
                 catch { manager.actionError = .init(title: "Chưa đọc được proxy đã lưu", details: error.localizedDescription) }
             }, phoneProxy: manager.identities[device.id]?.proxy, onApplied: { line in
-                Task { await manager.recordProxy(device, line: line) }
+                Task {
+                    await manager.recordProxy(device, line: line)
+                    await manager.startTether(device)
+                }
             })
         }
         .sheet(item: $threadsDevice) { device in
@@ -538,6 +541,7 @@ private struct DeviceCard: View {
 
             Spacer(minLength: 6)
 
+            tetherButton
             screenButton
 
             HStack(spacing: 5) {
@@ -723,6 +727,48 @@ private struct DeviceCard: View {
             editingIdentity = false
         } catch {
             identityError = error.localizedDescription
+        }
+    }
+
+    /// Internet over the USB cable through the phone's proxy. Started on connect; click to reconnect.
+    @ViewBuilder
+    private var tetherButton: some View {
+        let state = manager.tether[device.id]
+        if state == .starting {
+            ProgressView().controlSize(.small).frame(width: 18)
+                .help("Đang nối internet qua cáp USB…")
+        } else if device.isReady {
+            Button {
+                Task { await manager.startTether(device) }
+            } label: {
+                Image(systemName: "cable.connector")
+                    .foregroundStyle(tetherColor(state))
+            }
+            .buttonStyle(.borderless)
+            .disabled(isRunning)
+            .help(tetherHelp(state))
+            .accessibilityLabel("Nối lại internet qua cáp USB")
+        }
+    }
+
+    private func tetherColor(_ state: DeviceManager.TetherState?) -> Color {
+        switch state {
+        case .on(_, true): return .green
+        case .on(_, false), .failed: return .orange
+        default: return .secondary
+        }
+    }
+
+    private func tetherHelp(_ state: DeviceManager.TetherState?) -> String {
+        switch state {
+        case .on(let ip, true):
+            return "Internet qua cáp USB, đi qua proxy" + (ip.map { " · IP \($0)" } ?? "") + ". Wi-Fi và dữ liệu di động đã tắt. Bấm để nối lại."
+        case .on(let ip, false):
+            return "Internet qua cáp USB bằng mạng của Mac (chưa gắn proxy)" + (ip.map { " · IP \($0)" } ?? "") + ". Bấm Proxy để gắn proxy."
+        case .failed(let message):
+            return "Chưa có internet qua cáp USB: \(message) Bấm để thử lại."
+        default:
+            return "Internet qua cáp USB. Bấm để nối."
         }
     }
 
