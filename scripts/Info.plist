@@ -6,6 +6,8 @@
     <string>Phone Farm</string>
     <key>CFBundleExecutable</key>
     <string>PhoneFarm</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>local.phonefarm.mac</string>
     <key>CFBundleName</key>

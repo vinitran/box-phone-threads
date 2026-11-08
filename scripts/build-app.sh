@@ -64,6 +64,7 @@ if [[ -n "${PHONE_FARM_BUILD:-}" ]]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $PHONE_FARM_BUILD" "$app/Contents/Info.plist"
 fi
 ditto Resources/ThreadsDefaults "$app/Contents/Resources/ThreadsDefaults"
+cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 if [[ -f Resources/ai-key.enc.json ]]; then
     cp Resources/ai-key.enc.json "$app/Contents/Resources/ai-key.enc.json"
 else

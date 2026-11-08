@@ -86,6 +86,7 @@ jobs:
           test -f "$app/Contents/Resources/KeyboardReader.dex"
           lipo -info "$app/Contents/Resources/gnirehtet/gnirehtet"
           test -f "$app/Contents/Resources/gnirehtet/gnirehtet.apk"
+          test -f "$app/Contents/Resources/AppIcon.icns"
           test -f "$app/Contents/Resources/ai-key.enc.json"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist"
           codesign --verify --deep --strict "$app"
