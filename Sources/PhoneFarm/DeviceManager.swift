@@ -23,9 +23,21 @@ final class DeviceManager: ObservableObject {
         /// No proxy saved: the phone gets no internet and no action runs on it.
         case needsProxy
         case failed(String)
+        /// The phone uses its own Wi-Fi or SIM, without the proxy; ip is nil until it is online.
+        case phoneNetwork(ip: String?)
+    }
+    /// How a phone reaches the internet, chosen per phone with the button on its card.
+    enum NetworkMode: String {
+        /// Over the USB cable through the phone's proxy; Wi-Fi and SIM are turned off.
+        case usb
+        /// The phone's own Wi-Fi or SIM, without the proxy.
+        case phone
     }
     /// Internet over the USB cable per connected phone, started automatically on connect.
     @Published private(set) var tether: [String: TetherState] = [:]
+    /// Phones switched to their own network; every other phone uses the USB tunnel.
+    @Published private(set) var phoneNetworkDevices: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: "phoneNetworkDevices") ?? [])
     private var relays: [String: RunningCommand] = [:]
     private var relayPorts: [String: Int] = [:]
     /// Required apps (Gboard, Threads, Instagram) missing on each connected phone, checked once per connection.
@@ -198,12 +210,28 @@ final class DeviceManager: ObservableObject {
         return profile
     }
 
-    // MARK: Internet over USB through the phone's proxy
+    // MARK: Internet over USB through the phone's proxy, or the phone's own network
 
-    /// (Re)starts the phone's relay with its current proxy and brings up its VPN. Also used after
-    /// the proxy changes: the phone's tunnel reconnects to the new relay by itself.
+    func networkMode(_ device: AndroidDevice) -> NetworkMode {
+        phoneNetworkDevices.contains(device.id) ? .phone : .usb
+    }
+
+    /// Switches the phone between the USB tunnel and its own Wi-Fi/SIM, and remembers the choice.
+    func setNetworkMode(_ device: AndroidDevice, _ mode: NetworkMode) async {
+        guard tether[device.id] != .starting, !runningThreads.contains(device.id) else { return }
+        if mode == .phone { phoneNetworkDevices.insert(device.id) } else { phoneNetworkDevices.remove(device.id) }
+        UserDefaults.standard.set(phoneNetworkDevices.sorted(), forKey: "phoneNetworkDevices")
+        await startTether(device)
+    }
+
+    /// Brings up the phone's chosen network. Also used after the proxy changes: the phone's
+    /// tunnel reconnects to the new relay by itself.
     func startTether(_ device: AndroidDevice) async {
         guard device.isReady, tether[device.id] != .starting, let adb = ToolPaths.adb() else { return }
+        if networkMode(device) == .phone {
+            await usePhoneNetwork(device, adb: adb)
+            return
+        }
         guard let tools = USBTether.Tools.bundled else {
             tether[device.id] = .failed("Bản Phone Farm này thiếu gnirehtet. Hãy cập nhật app.")
             return
@@ -244,6 +272,33 @@ final class DeviceManager: ObservableObject {
         }
     }
 
+    /// Stops the USB tunnel and turns the phone's Wi-Fi and SIM data back on.
+    private func usePhoneNetwork(_ device: AndroidDevice, adb: URL) async {
+        tether[device.id] = .starting
+        USBTether.log(device.serial, "phone network")
+        relays.removeValue(forKey: device.id)?.stop()
+        do {
+            try await USBTether.disconnect(serial: device.serial, adb: adb)
+        } catch {
+            USBTether.log(device.serial, "phone network failed: " + error.localizedDescription)
+            tether[device.id] = .failed(error.localizedDescription)
+            return
+        }
+        tether[device.id] = .phoneNetwork(ip: nil)
+        // Wi-Fi needs a few seconds to join its network after it is turned on.
+        for attempt in 0..<4 {
+            if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
+            guard networkMode(device) == .phone, relays[device.id] == nil else { return }
+            if let ip = await USBTether.publicIP(adb: adb, serial: device.serial) {
+                guard networkMode(device) == .phone, relays[device.id] == nil else { return }
+                USBTether.log(device.serial, "phone network ip " + ip)
+                tether[device.id] = .phoneNetwork(ip: ip)
+                return
+            }
+        }
+        USBTether.log(device.serial, "phone network: no internet yet")
+    }
+
     private func relayPort(_ device: AndroidDevice) -> Int {
         if let port = relayPorts[device.id] { return port }
         let port = USBTether.firstPort + relayPorts.count
@@ -262,19 +317,26 @@ final class DeviceManager: ObservableObject {
         }
     }
 
-    /// Every action on a phone needs its proxy: the USB tunnel must be up through it.
+    /// Actions on a phone need its network: the USB tunnel up through the proxy, or the phone's
+    /// own Wi-Fi/SIM when the phone is switched to it.
     func isProxyReady(_ device: AndroidDevice) -> Bool {
-        if case .on = tether[device.id] { return true }
-        return false
+        proxyBlockReason(device) == nil
     }
 
-    /// Why actions are locked on this phone, or nil when its proxy is ready.
+    /// Why actions are locked on this phone, or nil when its network is ready.
     func proxyBlockReason(_ device: AndroidDevice) -> String? {
         switch tether[device.id] {
-        case .on: return nil
-        case .starting: return "Đang nối internet qua cáp USB và proxy. Chờ biểu tượng cáp chuyển xanh."
-        case .failed(let message): return "Chưa có internet qua proxy: \(message)"
-        case .needsProxy, nil: return "Máy chưa gắn proxy. Bấm Proxy để gắn proxy trước khi thao tác."
+        case .on, .phoneNetwork: return nil
+        case .starting:
+            return networkMode(device) == .phone
+                ? "Đang chuyển sang Wi-Fi/SIM của điện thoại. Chờ một chút."
+                : "Đang nối internet qua cáp USB và proxy. Chờ biểu tượng cáp chuyển xanh."
+        case .failed(let message):
+            return networkMode(device) == .phone
+                ? "Chưa chuyển được sang Wi-Fi/SIM: \(message)"
+                : "Chưa có internet qua proxy: \(message)"
+        case .needsProxy, nil:
+            return "Máy chưa gắn proxy. Bấm Proxy để gắn proxy, hoặc bấm biểu tượng cáp để dùng Wi-Fi/SIM của điện thoại."
         }
     }
 

@@ -579,16 +579,19 @@ private struct DeviceCard: View {
     private var proxyRow: some View {
         HStack(spacing: 10) {
             let blocked = device.isReady ? manager.proxyBlockReason(device) : nil
+            let phoneNetwork = manager.networkMode(device) == .phone
             Label {
-                Text(manager.proxyAddress(device) ?? "Chưa gắn proxy · cần gắn để thao tác")
+                Text(phoneNetwork
+                     ? "Wi-Fi/SIM của điện thoại · không qua proxy"
+                     : manager.proxyAddress(device) ?? "Chưa gắn proxy · cần gắn để thao tác")
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
             } icon: {
-                Image(systemName: blocked == nil ? "network" : "lock.fill")
+                Image(systemName: blocked != nil ? "lock.fill" : phoneNetwork ? "wifi" : "network")
             }
             .foregroundStyle(blocked == nil ? Color.secondary : Color.orange)
-            .help(blocked ?? "Đang ra internet qua proxy này")
+            .help(blocked ?? (phoneNetwork ? "Máy đang dùng mạng riêng; proxy đã lưu được giữ lại cho khi chuyển về cáp USB." : "Đang ra internet qua proxy này"))
 
             Spacer(minLength: 6)
 
@@ -699,45 +702,55 @@ private struct DeviceCard: View {
         }
     }
 
-    /// Internet over the USB cable through the phone's proxy. Started on connect; click to reconnect.
+    /// The phone's network: over the USB cable through its proxy, or its own Wi-Fi/SIM.
+    /// Click to switch between the two; right-click to reconnect.
     @ViewBuilder
     private var tetherButton: some View {
         let state = manager.tether[device.id]
+        let mode = manager.networkMode(device)
         if state == .starting {
             ProgressView().controlSize(.small).frame(width: 18)
-                .help("Đang nối internet qua cáp USB…")
+                .help(mode == .phone ? "Đang chuyển sang Wi-Fi/SIM của điện thoại…" : "Đang nối internet qua cáp USB…")
         } else if device.isReady {
             Button {
-                Task { await manager.startTether(device) }
+                Task { await manager.setNetworkMode(device, mode == .usb ? .phone : .usb) }
             } label: {
-                Image(systemName: "cable.connector")
+                Image(systemName: mode == .usb ? "cable.connector" : "wifi")
                     .foregroundStyle(tetherColor(state))
             }
             .buttonStyle(.borderless)
             .disabled(isRunning)
-            .help(tetherHelp(state))
-            .accessibilityLabel("Nối lại internet qua cáp USB")
+            .help(isRunning ? "Dừng chu kỳ Threads trước khi đổi mạng." : tetherHelp(state))
+            .accessibilityLabel(mode == .usb ? "Chuyển sang Wi-Fi/SIM của điện thoại" : "Chuyển sang internet qua cáp USB")
+            .contextMenu {
+                Button("Nối lại mạng") { Task { await manager.startTether(device) } }
+                    .disabled(isRunning)
+            }
         }
     }
 
     private func tetherColor(_ state: DeviceManager.TetherState?) -> Color {
         switch state {
-        case .on: return .green
-        case .needsProxy, .failed: return .orange
+        case .on, .phoneNetwork(ip: .some): return .green
+        case .needsProxy, .failed, .phoneNetwork(ip: nil): return .orange
         default: return .secondary
         }
     }
 
     private func tetherHelp(_ state: DeviceManager.TetherState?) -> String {
+        let toggle = " Bấm để chuyển mạng, chuột phải để nối lại."
         switch state {
         case .on(let ip):
-            return "Internet qua cáp USB, đi qua proxy" + (ip.map { " · IP \($0)" } ?? "") + ". Wi-Fi và dữ liệu di động đã tắt. Bấm để nối lại."
+            return "Đang dùng internet qua cáp USB, đi qua proxy" + (ip.map { " · IP \($0)" } ?? "") + ". Wi-Fi và dữ liệu di động đã tắt." + toggle
+        case .phoneNetwork(let ip):
+            return (ip.map { "Đang dùng Wi-Fi/SIM của điện thoại, không qua proxy · IP \($0)." }
+                ?? "Đã chuyển sang Wi-Fi/SIM của điện thoại nhưng chưa thấy internet. Kiểm tra Wi-Fi trên điện thoại.") + toggle
         case .needsProxy:
-            return "Chưa gắn proxy nên máy không có internet qua cáp và mọi thao tác bị khóa. Bấm Proxy để gắn proxy."
+            return "Chưa gắn proxy nên máy không có internet qua cáp và mọi thao tác bị khóa. Bấm Proxy để gắn proxy." + toggle
         case .failed(let message):
-            return "Chưa có internet qua cáp USB: \(message) Bấm để thử lại."
+            return "Lỗi mạng: \(message)" + toggle
         default:
-            return "Internet qua cáp USB. Bấm để nối."
+            return "Internet qua cáp USB." + toggle
         }
     }
 

@@ -4,7 +4,8 @@ import Foundation
 /// sends all of its traffic over adb to a relay on the Mac. Every phone gets its own relay
 /// (Phone Farm's build of gnirehtet, see gnirehtet-relay/), started with that phone's proxy so
 /// each TCP connection leaves through the proxy with HTTP CONNECT. Wi-Fi and mobile data are
-/// turned off, so the phone has no other way to the internet.
+/// turned off, so the phone has no other way to the internet. A phone switched to its own network
+/// (DeviceManager.NetworkMode.phone) stops the VPN and gets Wi-Fi and data back.
 enum USBTether {
     static let package = "com.genymobile.gnirehtet"
     /// Relays listen on consecutive ports from here, one per phone (gnirehtet's default is 31416).
@@ -104,6 +105,23 @@ enum USBTether {
             rm -rf "$d"; done; true
             """
         _ = await (try RunningCommand(adb, arguments: shell + [cleanup])).result(timeout: 30)
+    }
+
+    /// Stops the gnirehtet VPN and turns Wi-Fi and mobile data back on, so the phone uses its own network.
+    static func disconnect(serial: String, adb: URL) async throws {
+        let stop = "am start -a com.genymobile.gnirehtet.STOP -n \(package)/.GnirehtetActivity >/dev/null 2>&1; "
+            + "sleep 1; am force-stop \(package); svc wifi enable; svc data enable; true"
+        let result = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", stop])).result(timeout: 30)
+        _ = await (try? RunningCommand(adb, arguments: ["-s", serial, "reverse", "--remove", "localabstract:gnirehtet"]))?
+            .result(timeout: 10)
+        guard result.status == 0 else {
+            throw TetherError("Không tắt được VPN gnirehtet trên điện thoại. " + result.diagnostics)
+        }
+        for _ in 0..<10 {
+            if !(await isConnected(adb: adb, serial: serial)) { return }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        throw TetherError("VPN gnirehtet vẫn còn bật trên điện thoại.")
     }
 
     /// True when a connected VPN network uses gnirehtet's tun0 interface.
