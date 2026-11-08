@@ -16,8 +16,9 @@ enum ThreadsComment {
         let target: String
         let author: String
         let reply: String
-        let photoCount = 3
+        let photoCount: Int
         let composer: String
+        let deadline: Double?
     }
 
     private struct AttachmentRequest: Encodable {
@@ -44,12 +45,23 @@ enum ThreadsComment {
     static func send(
         adb: URL, serial: String, id: String, text: String,
         stable: Bool = false, forward: Bool = false,
+        kind: ThreadsCommentKind = .promotion, deadline: Date? = nil,
         progress: @escaping @MainActor @Sendable (DeviceProgress) -> Void
     ) async throws -> String {
         let keys = try Telex.keys(for: text)
+        try ThreadsLoop.checkDeadline(deadline)
+        guard kind.allows(text) else { return "invalid_reply" }
         try await ThreadsAttachments.cleanupSubmitted(adb: adb, serial: serial)
-        let settings = try PhoneFarmStore.shared.get().threadsSettings().validated()
-        let batch = try await ThreadsAttachments.prepare(adb: adb, serial: serial, images: settings.pickImages(), progress: progress)
+        let batch: ThreadsAttachments.Batch?
+        if kind.photoCount > 0 {
+            let settings = try PhoneFarmStore.shared.get().threadsSettings().validated()
+            batch = try await ThreadsAttachments.prepare(adb: adb, serial: serial, images: settings.pickImages(), progress: progress)
+        } else { batch = nil }
+        do { try ThreadsLoop.checkDeadline(deadline) }
+        catch {
+            if let batch { _ = await Task.detached { await ThreadsAttachments.remove(batch, adb: adb, serial: serial) }.value }
+            throw error
+        }
         progress(DeviceProgress(message: "Đang tìm bài để bình luận"))
         let request = Request(id: id, action: "reply",
                               reply: text, stable: stable, forward: forward)
@@ -57,7 +69,7 @@ enum ThreadsComment {
         guard prepared.actionStatus == "reply_ready", let target = prepared.target, let author = prepared.author,
               let postID = prepared.postID
         else {
-            await ThreadsAttachments.remove(batch, adb: adb, serial: serial)
+            if let batch { await ThreadsAttachments.remove(batch, adb: adb, serial: serial) }
             return prepared.actionStatus
         }
         if !keys.isEmpty {
@@ -69,27 +81,36 @@ enum ThreadsComment {
                                         completed: done, total: total))
             }
         }
-        try Task.checkCancellation()
-        progress(DeviceProgress(message: "Đang đính kèm 3 ảnh · app_store.png ở giữa"))
-        try await ThreadsAttachments.verify(batch, adb: adb, serial: serial)
-        let opened = try await perform(AttachmentRequest(action: "attach_reply", target: target, author: author, reply: text,
-                                                            composer: prepared.composer ?? "inline", postID: postID, photos: batch),
-                                         adb: adb, serial: serial, progress: progress)
-        guard opened.actionStatus == "reply_picker_open" else { return opened.actionStatus }
-        try await ThreadsAttachments.verify(batch, adb: adb, serial: serial)
-        let attached = try await perform(AttachmentRequest(action: "select_reply_photos", target: target, author: author, reply: text,
-                                                           composer: prepared.composer ?? "inline", postID: postID, photos: batch),
-                                        adb: adb, serial: serial, progress: progress)
-        guard attached.actionStatus == "reply_ready", let finalTarget = attached.target else { return attached.actionStatus }
-        try Task.checkCancellation()
+        try ThreadsLoop.checkDeadline(deadline)
+        var finalTarget = target
+        var composer = prepared.composer ?? "inline"
+        if let batch {
+            progress(DeviceProgress(message: "Đang đính kèm 3 ảnh · app_store.png ở giữa"))
+            try await ThreadsAttachments.verify(batch, adb: adb, serial: serial)
+            let opened = try await perform(AttachmentRequest(action: "attach_reply", target: target, author: author, reply: text,
+                                                                composer: composer, postID: postID, photos: batch),
+                                             adb: adb, serial: serial, progress: progress)
+            guard opened.actionStatus == "reply_picker_open" else { return opened.actionStatus }
+            try await ThreadsAttachments.verify(batch, adb: adb, serial: serial)
+            let attached = try await perform(AttachmentRequest(action: "select_reply_photos", target: target, author: author, reply: text,
+                                                               composer: composer, postID: postID, photos: batch),
+                                            adb: adb, serial: serial, progress: progress)
+            guard attached.actionStatus == "reply_ready", let attachedTarget = attached.target else { return attached.actionStatus }
+            finalTarget = attachedTarget
+            composer = attached.composer ?? "full"
+        }
+        try ThreadsLoop.checkDeadline(deadline)
         let result = try await perform(Submission(target: finalTarget, author: author, reply: text,
-                                                   composer: attached.composer ?? "full"),
+                                                   photoCount: kind.photoCount, composer: composer, deadline: deadline?.timeIntervalSince1970),
                                        adb: adb, serial: serial, progress: progress)
+        if result.actionStatus == "posting_window_ended" { throw ThreadsLoop.WindowEnded() }
         if result.actionStatus == "reply_submitted" {
             do { try PhoneFarmStore.shared.get().recordComment(serial: serial) }
             catch { logger.error("Could not record submitted comment") }
-            do { try PhoneFarmStore.shared.get().queueSubmittedPhotos(batch, serial: serial) }
-            catch { logger.error("Could not queue submitted photo cleanup") }
+            if let batch {
+                do { try PhoneFarmStore.shared.get().queueSubmittedPhotos(batch, serial: serial) }
+                catch { logger.error("Could not queue submitted photo cleanup") }
+            }
         }
         return result.actionStatus
     }

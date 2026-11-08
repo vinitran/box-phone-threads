@@ -299,13 +299,15 @@ public final class ThreadsReader {
             if (quoted == null || !quoted.author.equals(author) || !quoted.token(true).equals(target)) {
                 return outcome("target_changed");
             }
-            revealFullReplyEditor(automation);
+            editor = revealFullReplyEditor(automation);
             if (request.optInt("photoCount") == 3 && !hasThreePhotos(automation)) return outcome("photos_changed");
+            if (request.has("photoCount") && request.optInt("photoCount") == 0 && (editor == null || composerCarousel(editor) != null)) return outcome("photos_changed");
             AccessibilityNodeInfo root = threadsRoot(automation);
             if (withPhoto) return openReplyGallery(automation, root);
             AccessibilityNodeInfo submit = find(root, "new_thread_screen_post_button");
             if (submit == null) return outcome("composer_unavailable");
             progress("sending_reply", 0, 0);
+            if (postingWindowExpired(request)) return outcome("posting_window_ended");
             if (!press(automation, submit)) return outcome("draft_failed");
             return outcome("reply_submitted");
         }
@@ -315,14 +317,21 @@ public final class ThreadsReader {
             AccessibilityNodeInfo editor = find(detail, "permalink_inline_composer");
             AccessibilityNodeInfo submit = find(detail, "permalink_inline_composer_post_button");
             if (editor == null || !target.equals(replyContext(detail, author))) return outcome("target_changed");
+            if (request.has("photoCount") && request.optInt("photoCount") == 0 && composerCarousel(editor) != null) return outcome("photos_changed");
             if (withPhoto) return openReplyGallery(automation, detail);
             if (submit != null) {
                 progress("sending_reply", 0, 0);
+                if (postingWindowExpired(request)) return outcome("posting_window_ended");
                 if (!press(automation, submit)) return outcome("draft_failed");
                 return outcome("reply_submitted");
             }
         }
         return outcome("draft_failed");
+    }
+
+    private static boolean postingWindowExpired(JSONObject request) {
+        double deadline = request.optDouble("deadline", 0);
+        return deadline > 0 && System.currentTimeMillis() / 1000.0 >= deadline;
     }
 
     /**

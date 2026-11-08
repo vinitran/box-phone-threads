@@ -786,7 +786,7 @@ private struct DeviceCard: View {
 
             threadsButton
                 .fixedSize()
-                .help("Sau mỗi lần bấm Đăng: về Trang chủ, giữ Threads mở 1 phút, tắt hẳn Threads và nghỉ theo chế độ: Dev 2 phút, Production 20–30 phút rồi chạy tiếp. Sau bình luận thứ 10 của mỗi chu kỳ: tắt Threads và nghỉ 3 giờ. Giữ Phone Farm mở trên Mac; bấm Đóng để kết thúc.")
+                .help("Trong 3 giờ: 5 comment giới thiệu, mỗi lần theo sau bởi ngẫu nhiên 1–2 comment thông thường không ảnh; giờ gửi ngẫu nhiên. Hết khung nghỉ 4 giờ rồi lặp lại. Sau mỗi Đăng giữ Threads mở 1 phút rồi tắt. Giữ Phone Farm mở trên Mac; bấm Đóng để dừng.")
         }
         .buttonStyle(.bordered)
     }

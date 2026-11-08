@@ -5,6 +5,7 @@ enum ThreadsReplyAI {
     static let maximumRetries = 5
     static let retryDelaySeconds = 30
     typealias StatusHandler = @Sendable (String) async -> Void
+    typealias Completion = (_ system: String, _ input: String) async throws -> String
     private static let logger = Logger(subsystem: "local.phonefarm.mac", category: "Threads")
     private enum ServiceError: LocalizedError {
         case connection
@@ -47,17 +48,16 @@ enum ThreadsReplyAI {
     }
 
     static func choose(from posts: [Candidate], key: String, settings: ThreadsSettings,
+                       kind: ThreadsCommentKind = .promotion, deadline: Date? = nil,
+                       completion: Completion? = nil,
                        onStatus: StatusHandler? = nil) async throws -> Decision {
+        try ThreadsLoop.checkDeadline(deadline)
         let input = String(decoding: try JSONEncoder().encode(posts), as: UTF8.self)
         let instruction = { (prompt: ThreadsSettings.ReplyPrompt) in """
-            Chủ đề ưu tiên do người dùng cấu hình:
-            \(settings.topics)
-            Đọc và so sánh toàn bộ bài trong dữ liệu. Luôn chọn đúng một bài canReply=true
-            gần các chủ đề đã cấu hình nhất để bình luận, kể cả khi không có bài khớp trực tiếp.
-            Nếu mọi bài đều xa chủ đề, vẫn chọn bài gần nhất trong các bài đủ điều kiện.
+            \(kind == .promotion ? "Chủ đề ưu tiên do người dùng cấu hình: " + settings.topics + ". Chọn đúng một bài canReply=true gần các chủ đề này nhất để bình luận." : "Chọn đúng một bài canReply=true có nội dung rõ ràng mà bạn có thể đóng góp câu trả lời hoặc câu hỏi cụ thể. Không ưu tiên chủ đề mua sắm hoặc tìm cơ hội quảng bá.")
             Soạn nội dung reply.text theo prompt trả lời ở dưới.
             Chọn thêm đúng một bài canLike=true KHÁC bài bình luận để thả tim.
-            Bài thả tim cũng ưu tiên gần các chủ đề đã cấu hình nhất trong các bài còn lại.
+            \(kind == .promotion ? "Bài thả tim cũng ưu tiên gần các chủ đề đã cấu hình nhất trong các bài còn lại." : "Bài thả tim là một bài khác có nội dung rõ ràng, không cần thuộc chủ đề mua sắm.")
             Chỉ dùng like=null khi không có bài khác đủ điều kiện thả tim.
             Chỉ trả về JSON dạng {"like":2,"reply":{"index":1,"text":"…"}}.
             reply bắt buộc có một bài. Chỉ số like và reply.index phải khác nhau.
@@ -76,9 +76,15 @@ enum ThreadsReplyAI {
         }
         // Validate both choices before allowing either public action.
         for _ in 0..<2 {
-            let prompt = settings.pickReplyPrompt()
+            try ThreadsLoop.checkDeadline(deadline)
+            let prompt = kind == .ordinary
+                ? ThreadsSettings.ReplyPrompt(id: "ordinary", name: "Trao đổi thông thường", text: ThreadsCommentKind.ordinaryPrompt)
+                : settings.pickReplyPrompt()
             logger.info("Using reply prompt: \(prompt.name, privacy: .public)")
-            let text = try await complete(system: instruction(prompt), input: input, key: key, onStatus: onStatus)
+            let text: String
+            if let completion { text = try await completion(instruction(prompt), input) }
+            else { text = try await complete(system: instruction(prompt), input: input, key: key, onStatus: onStatus, deadline: deadline) }
+            try ThreadsLoop.checkDeadline(deadline)
             guard let decision = try? JSONDecoder().decode(Decision.self, from: Data(text.utf8)),
                   posts.contains(where: { $0.index == decision.reply.index && $0.canReply }) else { continue }
             let otherLikes = posts.filter { $0.canLike && $0.index != decision.reply.index }
@@ -89,6 +95,7 @@ enum ThreadsReplyAI {
             }
             let reply = decision.reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !reply.isEmpty, reply.count <= 450,
+                  kind.allows(reply),
                   reply.range(of: #"(?i)https?://|www\.|@"#, options: .regularExpression) == nil,
                   (try? Telex.keys(for: reply)) != nil else { continue }
             return decision
@@ -117,7 +124,7 @@ enum ThreadsReplyAI {
         return text
     }
 
-    private static func complete(system: String, input: String, key: String, onStatus: StatusHandler?) async throws -> String {
+    private static func complete(system: String, input: String, key: String, onStatus: StatusHandler?, deadline: Date? = nil) async throws -> String {
         var request = URLRequest(url: URL(string: "https://ai.hoanxu.com/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 180 // 3 minutes per AI request
@@ -127,7 +134,7 @@ enum ThreadsReplyAI {
             Message(role: "system", content: system),
             Message(role: "user", content: input)
         ]))
-        let (data, response) = try await fetch(request, onStatus: onStatus)
+        let (data, response) = try await fetch(request, onStatus: onStatus, deadline: deadline)
         guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
             throw URLError(.badServerResponse)
         }
@@ -138,14 +145,17 @@ enum ThreadsReplyAI {
     }
 
     static func fetch(_ request: URLRequest, onStatus: StatusHandler? = nil,
+                      deadline: Date? = nil,
                       sleep: (Int) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) async throws -> (Data, URLResponse) {
         let transient: Set<URLError.Code> = [.networkConnectionLost, .timedOut, .cannotConnectToHost,
                                              .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet]
         for attempt in 0...maximumRetries {
-            try Task.checkCancellation()
+            try ThreadsLoop.checkDeadline(deadline)
             do {
-                let result = try await URLSession.shared.data(for: request)
-                try Task.checkCancellation()
+                var current = request
+                if let deadline { current.timeoutInterval = max(1, min(current.timeoutInterval, deadline.timeIntervalSinceNow)) }
+                let result = try await URLSession.shared.data(for: current)
+                try ThreadsLoop.checkDeadline(deadline)
                 let status = (result.1 as? HTTPURLResponse)?.statusCode ?? 0
                 // Temporary server/rate-limit errors may recover; credentials and
                 // other permanent client errors return immediately to the caller.
@@ -153,6 +163,8 @@ enum ThreadsReplyAI {
             } catch let error as URLError where transient.contains(error.code) {
                 // Retry the same request without repeating any phone interaction.
             }
+            try ThreadsLoop.checkDeadline(deadline)
+            if let deadline, deadline.timeIntervalSinceNow <= Double(retryDelaySeconds) { throw ThreadsLoop.WindowEnded() }
             guard attempt < maximumRetries else { throw ServiceError.connection }
             let retry = attempt + 1
             await onStatus?("AI chưa kết nối · thử lại \(retry)/\(maximumRetries) sau \(retryDelaySeconds) giây")

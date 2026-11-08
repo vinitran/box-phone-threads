@@ -12,8 +12,6 @@ struct ThreadsSettings: Codable, Equatable {
     enum Environment: String, Codable, CaseIterable {
         case dev, production
         var title: String { self == .dev ? "Dev" : "Production" }
-        var restRange: ClosedRange<Int> { self == .dev ? 120...120 : 1_200...1_800 }
-        var restLabel: String { self == .dev ? "2 phút" : "20–30 phút" }
     }
 
     struct ReplyPrompt: Codable, Equatable, Identifiable {
@@ -58,7 +56,7 @@ struct ThreadsSettings: Codable, Equatable {
                                imageFolder: folder.path, replyPrompts: try bundledPrompts())
     }
 
-    func validated() throws -> ThreadsSettings {
+    func validated(validateImages: Bool = true) throws -> ThreadsSettings {
         var value = self
         value.topics = topics.trimmingCharacters(in: .whitespacesAndNewlines)
         value.replyPrompt = replyPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -75,7 +73,7 @@ struct ThreadsSettings: Codable, Equatable {
                 throw SettingsError("Cần đúng 10 prompt khác nhau, mỗi prompt không rỗng và tối đa 40.000 ký tự.")
             }
         }
-        _ = try value.images()
+        if validateImages { _ = try value.images() }
         return value
     }
 

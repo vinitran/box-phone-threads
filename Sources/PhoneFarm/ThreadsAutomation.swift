@@ -46,8 +46,10 @@ enum ThreadsAutomation {
     @MainActor
     static func run(adb: URL, serial: String, key: String,
                     prepareFeed: Bool = true,
+                    kind: ThreadsCommentKind = .promotion, deadline: Date? = nil,
                     progress: @escaping @MainActor @Sendable (DeviceProgress) -> Void) async throws -> Result {
-        let settings = try PhoneFarmStore.shared.get().threadsSettings().validated()
+        try ThreadsLoop.checkDeadline(deadline)
+        let settings = try PhoneFarmStore.shared.get().threadsSettings().validated(validateImages: kind.photoCount > 0)
         if prepareFeed {
             progress(DeviceProgress(message: "Đang bấm Trang chủ và chờ feed"))
             let refresh: ActionResult = try await read(adb: adb, serial: serial, entry: .threadsRefresh, progress: progress)
@@ -67,13 +69,13 @@ enum ThreadsAutomation {
         if feed.stopReason == "draft_exists" {
             return Result(message: "Threads đang có bình luận chưa gửi. Hãy xử lý bản nháp trên điện thoại.", hasIssue: true)
         }
-        var interactions = try await interact(with: feed, adb: adb, serial: serial, key: key, settings: settings, progress: progress)
+        var interactions = try await interact(with: feed, adb: adb, serial: serial, key: key, settings: settings, kind: kind, deadline: deadline, progress: progress)
         for _ in 0..<3 where interactions.needsNewPosts {
             progress(DeviceProgress(message: "Các bài này đã được xử lý · đang lướt tìm bài mới"))
             let scroll: ScrollResult = try await read(adb: adb, serial: serial, entry: .threadsScroll, progress: progress)
             guard scroll.scrolled else { break }
             feed = try await read(adb: adb, serial: serial, entry: .threadsAutoFeed, progress: progress)
-            interactions = try await interact(with: feed, adb: adb, serial: serial, key: key, settings: settings, progress: progress)
+            interactions = try await interact(with: feed, adb: adb, serial: serial, key: key, settings: settings, kind: kind, deadline: deadline, progress: progress)
         }
         let scanWarning = feed.posts.count < feed.requested ? "Feed dừng trước số bài đã chọn." : nil
         let summary = "Đã đọc \(feed.posts.count)/\(feed.requested) bài · \(interactions.likes) lượt thích · Đã bấm Đăng \(interactions.replies) lần"
@@ -98,7 +100,7 @@ enum ThreadsAutomation {
 
     @MainActor
     private static func interact(with feed: Feed, adb: URL, serial: String, key: String,
-                                 settings: ThreadsSettings,
+                                 settings: ThreadsSettings, kind: ThreadsCommentKind, deadline: Date?,
                                  progress: @escaping @MainActor @Sendable (DeviceProgress) -> Void) async throws -> Interactions {
         var interactions = Interactions()
         let storage = try PhoneFarmStore.shared.get()
@@ -117,11 +119,12 @@ enum ThreadsAutomation {
             interactions.needsNewPosts = true
             return interactions
         }
-        progress(DeviceProgress(message: "AI đang chọn theo chủ đề đã lưu và soạn bình luận"))
-        let decision = try await ThreadsReplyAI.choose(from: candidates, key: key, settings: settings) { message in
+        try ThreadsLoop.checkDeadline(deadline)
+        progress(DeviceProgress(message: kind == .promotion ? "AI đang soạn bình luận giới thiệu" : "AI đang soạn trả lời thông thường · không quảng bá"))
+        let decision = try await ThreadsReplyAI.choose(from: candidates, key: key, settings: settings, kind: kind, deadline: deadline) { message in
             await progress(DeviceProgress(message: message))
         }
-        try Task.checkCancellation()
+        try ThreadsLoop.checkDeadline(deadline)
         let allowed = Dictionary(uniqueKeysWithValues: candidates.map { ($0.index, $0) })
         let reply = decision.reply
         guard allowed[reply.index]?.canReply == true else {
@@ -134,6 +137,7 @@ enum ThreadsAutomation {
         logger.info("Selected \(likes.count) likes, reply selected: true")
         var position = feed.posts.count
         for index in likes {
+            try ThreadsLoop.checkDeadline(deadline)
             progress(DeviceProgress(message: "Đang tìm bài \(index)/\(feed.posts.count) để thả tim"))
             let action = Action(id: feed.posts[index - 1].stableID, action: "like", reply: nil, forward: index > position)
             let status = try await perform(action, adb: adb, serial: serial, progress: progress)
@@ -147,21 +151,22 @@ enum ThreadsAutomation {
         }
         let text = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.unicodeScalars.count <= 500,
+              kind.allows(text),
               text.range(of: #"(?i)https?://|www\.|@"#, options: .regularExpression) == nil else {
             interactions.warning = "Nội dung AI trả về chưa hợp lệ để đăng."
             return interactions
         }
         _ = try Telex.keys(for: text)
         let id = feed.posts[reply.index - 1].stableID
-        progress(DeviceProgress(message: "Đã chọn bài \(reply.index)/\(feed.posts.count) gần chủ đề đã lưu nhất để bình luận"))
-        try Task.checkCancellation()
+        progress(DeviceProgress(message: "Đã chọn bài \(reply.index)/\(feed.posts.count) · \(kind.title)"))
+        try ThreadsLoop.checkDeadline(deadline)
         // Reserve before sending so an interrupted ADB call cannot cause a duplicate.
         guard try storage.reserveReply(serial: serial, postID: id) else {
             interactions.warning = "Bài này đã có lượt bình luận được ghi nhận."
             return interactions
         }
         let status = try await ThreadsComment.send(adb: adb, serial: serial, id: id, text: text,
-                                                   stable: true, forward: reply.index > position, progress: progress)
+                                                   stable: true, forward: reply.index > position, kind: kind, deadline: deadline, progress: progress)
         logger.info("Reply result: \(status, privacy: .public)")
         switch status {
         case "reply_submitted":
@@ -181,7 +186,9 @@ enum ThreadsAutomation {
         case "invalid_reply":
             interactions.warning = "Nội dung bình luận không hợp lệ."
         case "photos_failed", "photos_changed":
-            interactions.warning = "Chưa xác nhận đủ ba ảnh đúng thứ tự. Bình luận chưa được đăng."
+            interactions.warning = kind == .promotion
+                ? "Chưa xác nhận đủ ba ảnh đúng thứ tự. Bình luận chưa được đăng."
+                : "Ô trả lời có ảnh ngoài dự kiến. Chưa đăng bình luận thông thường."
         case "permission_required":
             interactions.warning = "Threads cần quyền truy cập ảnh trên điện thoại. Bình luận chưa được đăng."
         case "gallery_unavailable":

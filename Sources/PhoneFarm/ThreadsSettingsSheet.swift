@@ -29,12 +29,12 @@ struct ThreadsSettingsSheet: View {
             Picker("Chế độ chạy", selection: Binding(get: { settings.runEnvironment }, set: { settings.environment = $0 })) {
                 ForEach(ThreadsSettings.Environment.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
             }.pickerStyle(.segmented)
-            Text("\(settings.runEnvironment.title): giữ Threads mở 1 phút sau Đăng, tắt hẳn rồi nghỉ \(settings.runEnvironment.restLabel). Chế độ áp dụng khi bắt đầu phiên mới.")
+            Text("Mỗi khung 3 giờ: 5 comment giới thiệu, sau mỗi lần là ngẫu nhiên 1–2 comment thông thường không ảnh. Giờ gửi được xếp ngẫu nhiên; hết khung nghỉ 4 giờ. Cả Dev và Production dùng lịch này, chỉ khác prompt giới thiệu.")
                 .font(.caption).foregroundStyle(.secondary)
             TabView {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Chủ đề AI ưu tiên").font(.headline)
-                    Text("Ngăn cách bằng dấu phẩy hoặc xuống dòng. AI luôn chọn một bài gần các chủ đề này nhất và một bài khác để thả tim.")
+                    Text("Ngăn cách bằng dấu phẩy hoặc xuống dòng. Lượt giới thiệu ưu tiên các chủ đề này; lượt thông thường trao đổi theo nội dung bài, không quảng bá.")
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     TextEditor(text: $settings.topics).accessibilityLabel("Chủ đề AI ưu tiên")
                         .padding(6).border(.secondary.opacity(0.3))
@@ -48,13 +48,13 @@ struct ThreadsSettingsSheet: View {
                         Button("Nhập 10 prompt…", action: importPromptBank)
                     }
                     if settings.runEnvironment == .dev {
-                        Text("Dev luôn dùng prompt mặc định. Có thể xem hoặc sửa nội dung ở dưới.")
+                        Text("Dev dùng prompt mặc định cho comment giới thiệu. Comment thông thường có prompt riêng không quảng bá.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if let bank = settings.replyPrompts {
                         Picker("Xem / sửa prompt", selection: $selectedPrompt) {
                             ForEach(Array(bank.enumerated()), id: \.element.id) { index, prompt in Text(prompt.name).tag(index) }
                         }
-                        Text("Mỗi lần soạn bình luận, AI dùng ngẫu nhiên một trong \(bank.count) prompt. Chọn ở đây để xem hoặc sửa.")
+                        Text("Mỗi comment giới thiệu dùng ngẫu nhiên một trong \(bank.count) prompt. Comment thông thường dùng prompt riêng không quảng bá.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     TextEditor(text: promptText).accessibilityLabel("Prompt trả lời bài viết")
@@ -74,7 +74,7 @@ struct ThreadsSettingsSheet: View {
                         .foregroundStyle(.secondary).lineLimit(3)
                     Text("Hai ảnh khác nhau được chọn ngẫu nhiên. app_store.png luôn là ảnh thứ 2. Chỉ đăng khi đủ ba ảnh.")
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Mỗi bình luận chuyển mới đủ ba ảnh với chấm pixel ngẫu nhiên. Tự dọn bộ ảnh đó sau 20 phút kể từ lúc bấm Đăng; giữ ảnh của bản nháp hoặc lượt chưa gửi.")
+                    Text("Chỉ comment giới thiệu chuyển mới ba ảnh với chấm pixel ngẫu nhiên; comment thông thường không kèm ảnh. Dọn bộ ảnh sau 20 phút kể từ lúc bấm Đăng; giữ ảnh của bản nháp chưa gửi.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(Array(images.enumerated()), id: \.offset) { index, file in

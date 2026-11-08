@@ -567,7 +567,7 @@ final class DeviceManager: ObservableObject {
         }
         do {
             let environment = try storage.threadsSettings().runEnvironment
-            try await ThreadsLoop.run(round: { prepareFeed, cycle, ordinal in
+            try await ThreadsLoop.run(round: { prepareFeed, cycle, ordinal, kind, deadline in
                 try Task.checkCancellation()
                 guard self.devices.contains(where: { $0.serial == device.serial && $0.isReady }) else {
                     throw ThreadsLaunchError(errorDescription: "Điện thoại đã ngắt kết nối. Chu kỳ đã dừng.")
@@ -576,12 +576,12 @@ final class DeviceManager: ObservableObject {
                     throw ThreadsLaunchError(errorDescription: reason + " Chu kỳ đã dừng.")
                 }
                 let runID = try storage.startRun(device: device)
-                let prefix = "Chu kỳ \(cycle) · Lượt \(ordinal)/10 · "
+                let prefix = "Chu kỳ \(cycle) · \(kind.title) · Lượt \(ordinal) · "
                 do {
                     let adb = try await self.launchThreads(device)
                     try await ThreadsAttachments.cleanupSubmitted(adb: adb, serial: device.serial)
                     let result = try await ThreadsAutomation.run(adb: adb, serial: device.serial, key: key,
-                                                                 prepareFeed: prepareFeed) { progress in
+                                                                 prepareFeed: prepareFeed, kind: kind, deadline: deadline) { progress in
                         self.updateThreadsActivity(device, progress: DeviceProgress(message: prefix + progress.message,
                                                                                    completed: progress.completed, total: progress.total))
                     }
@@ -600,23 +600,26 @@ final class DeviceManager: ObservableObject {
                 guard result.status == 0 else { throw ThreadsLaunchError(errorDescription: "Chưa đóng được Threads để nghỉ.") }
             }, event: { event in
                 switch event {
-                case let .starting(cycle, submitted):
+                case let .waiting(cycle, counts, slot, until):
+                    self.nextThreadsRun[device.id] = until
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Chờ lượt \(slot.kind.title.lowercased())"))
+                case let .starting(cycle, counts, slot, _):
                     self.nextThreadsRun.removeValue(forKey: device.id)
                     self.activities[device.id]?.startedAt = Date()
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · Đã bấm Đăng \(submitted)/10"))
-                case let .submitted(cycle, count):
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · Đã bấm Đăng \(count)/10"))
-                case let .keepingOpen(cycle, count, until):
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "\(environment.title) · Chu kỳ \(cycle) · \(counts.label) · Đang chạy lượt \(slot.kind.title.lowercased())"))
+                case let .submitted(cycle, counts):
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label)"))
+                case let .keepingOpen(cycle, counts, until):
                     self.nextThreadsRun[device.id] = until
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · Đã bấm Đăng \(count)/10 · Giữ Threads mở 1 phút trước khi thoát"))
-                case let .resting(cycle, count, until):
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Giữ Threads mở 1 phút trước khi thoát"))
+                case let .finishingWindow(cycle, counts, until):
                     self.nextThreadsRun[device.id] = until
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "\(environment.title) · Chu kỳ \(cycle) · Đã bấm Đăng \(count)/10 · Đã tắt Threads · nghỉ \(environment.restLabel)"))
-                case let .cycleResting(cycle, until):
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Đã tắt Threads · chờ hết khung 3 giờ"))
+                case let .cycleResting(cycle, counts, until):
                     self.nextThreadsRun[device.id] = until
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · Đã bấm Đăng 10/10 · Đã tắt Threads · nghỉ 3 giờ trước chu kỳ \(cycle + 1)"))
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Hết khung 3 giờ · nghỉ 4 giờ trước chu kỳ \(cycle + 1)"))
                 }
-            }, restRange: environment.restRange)
+            })
         } catch {
             updateThreadsActivity(device, progress: DeviceProgress(message: Task.isCancelled ? "Đã dừng chu kỳ Threads." : error.localizedDescription),
                                   hasIssue: !Task.isCancelled)
