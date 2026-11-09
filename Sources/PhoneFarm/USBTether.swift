@@ -5,9 +5,10 @@ import Foundation
 /// (Phone Farm's build of gnirehtet, see gnirehtet-relay/), started with that phone's proxy so
 /// each TCP connection leaves through the proxy with HTTP CONNECT. Wi-Fi and mobile data are
 /// turned off, so the phone has no other way to the internet. A phone switched to its own network
-/// (DeviceManager.NetworkMode.phone) stops the VPN and gets Wi-Fi and data back.
+/// (DeviceManager.NetworkMode.phone) runs the relay inside the VPN app instead, which reaches the
+/// proxy over Wi-Fi or SIM; every connection still goes through the proxy.
 enum USBTether {
-    static let package = "com.genymobile.gnirehtet"
+    static let package = "local.phonefarm.tunnel"
     /// Relays listen on consecutive ports from here, one per phone (gnirehtet's default is 31416).
     static let firstPort = 31_420
 
@@ -67,61 +68,105 @@ enum USBTether {
                            environment: environment(tools: tools, adb: adb, proxy: proxy))
     }
 
-    /// Installs the client when missing, starts its VPN towards the relay on `port`, then cuts
-    /// Wi-Fi and mobile data and removes the old per-phone proxy so nothing bypasses the cable.
+    /// Turns off Wi-Fi and mobile data and clears the old system proxy, so nothing leaves the phone
+    /// outside the VPN while it is (re)started.
+    static func cutNetwork(serial: String, adb: URL) async {
+        _ = await (try? RunningCommand(adb, arguments: ["-s", serial, "shell",
+            "settings put global http_proxy :0; svc wifi disable; svc data disable"]))?.result(timeout: 20)
+    }
+
+    /// Over the USB cable: the VPN sends everything to the relay on the Mac (port `port`), which
+    /// opens each connection through the phone's proxy. Wi-Fi and mobile data stay off.
     static func connect(serial: String, tools: Tools, adb: URL, port: Int) async throws {
+        await cutNetwork(serial: serial, adb: adb)
+        try await prepare(serial: serial, tools: tools, adb: adb)
+        let reverse = await (try RunningCommand(adb, arguments: ["-s", serial, "reverse", "localabstract:gnirehtet", "tcp:\(port)"]))
+            .result(timeout: 15)
+        guard reverse.status == 0 else {
+            throw TetherError("Không mở được đường hầm adb tới relay. " + reverse.diagnostics)
+        }
+        try await restart(serial: serial, adb: adb, extras: [])
+        // Remove the on-phone proxy bridge left by old Phone Farm versions.
+        let cleanup = """
+            for d in /data/local/tmp/phone-farm-proxy-*; do [ -d "$d" ] || continue; \
+            [ -f "$d/state.json" ] && CLASSPATH="$d/relay.dex" timeout 8 app_process /system/bin ProxyRelay stop "$d"; \
+            rm -rf "$d"; done; true
+            """
+        _ = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", cleanup])).result(timeout: 30)
+    }
+
+    /// Over the phone's own Wi-Fi or SIM: the VPN app runs the relay itself and opens each connection
+    /// through the proxy. Wi-Fi and data come back on only once the VPN is up, so no app sees the
+    /// real network without the proxy.
+    static func connectLocal(serial: String, tools: Tools, adb: URL, proxy: ProxyProfile) async throws {
+        await cutNetwork(serial: serial, adb: adb)
+        try await prepare(serial: serial, tools: tools, adb: adb)
+        _ = await (try? RunningCommand(adb, arguments: ["-s", serial, "reverse", "--remove", "localabstract:gnirehtet"]))?
+            .result(timeout: 10)
+        var extras = ["--ez", "localRelay", "true", "--es", "proxy", proxy.endpoint.address]
+        if let login = proxy.login {
+            extras += ["--es", "proxyAuth", Data("\(login.username):\(login.password)".utf8).base64EncodedString()]
+        }
+        try await restart(serial: serial, adb: adb, extras: extras)
+        _ = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "svc wifi enable; svc data enable"]))
+            .result(timeout: 20)
+    }
+
+    /// Phone Farm's build of the gnirehtet client (android/tunnel), installed as `package`.
+    static let apkVersionCode = 100
+    private static let activity = package + "/com.genymobile.gnirehtet.GnirehtetActivity"
+    private static let stockPackage = "com.genymobile.gnirehtet"
+
+    /// Installs or updates the VPN app, removes the stock gnirehtet app and grants the VPN consent.
+    private static func prepare(serial: String, tools: Tools, adb: URL) async throws {
         let shell = ["-s", serial, "shell"]
-        if await AppBundles.installedPackages(adb: adb, serial: serial)?.contains(package) != true {
-            let install = await (try RunningCommand(tools.gnirehtet, arguments: ["install", serial],
-                                                    environment: environment(tools: tools, adb: adb)))
+        let packages = await AppBundles.installedPackages(adb: adb, serial: serial) ?? []
+        if packages.contains(stockPackage) {
+            _ = await (try RunningCommand(adb, arguments: shell + ["pm", "uninstall", stockPackage])).result(timeout: 60)
+        }
+        if await installedVersionCode(serial: serial, adb: adb) < apkVersionCode {
+            var install = await (try RunningCommand(adb, arguments: ["-s", serial, "install", "-r", tools.apk.path]))
                 .result(timeout: 120)
+            if install.status != 0, install.diagnostics.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+                // Built with another signing key: replace it.
+                _ = await (try RunningCommand(adb, arguments: shell + ["pm", "uninstall", package])).result(timeout: 60)
+                install = await (try RunningCommand(adb, arguments: ["-s", serial, "install", tools.apk.path])).result(timeout: 120)
+            }
             guard install.status == 0 else {
-                throw TetherError("Không cài được app gnirehtet lên điện thoại. " + install.diagnostics)
+                throw TetherError("Không cài được app VPN lên điện thoại. " + install.diagnostics)
             }
         }
         // The VPN consent ("Connection request") is the ACTIVATE_VPN app-op; granting it avoids the dialog.
         _ = await (try RunningCommand(adb, arguments: shell + ["appops", "set", package, "ACTIVATE_VPN", "allow"]))
             .result(timeout: 10)
-        // `start` points the phone's tunnel at this port even when the client is already running.
-        let start = await (try RunningCommand(tools.gnirehtet, arguments: ["start", serial, "-p", String(port), "-d", "8.8.8.8,1.1.1.1"],
-                                              environment: environment(tools: tools, adb: adb)))
-            .result(timeout: 30)
-        guard start.status == 0 else {
-            throw TetherError("Không khởi động được VPN gnirehtet trên điện thoại. " + start.diagnostics)
-        }
-        var connected = false
-        for _ in 0..<30 {
-            if await isConnected(adb: adb, serial: serial) { connected = true; break }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        guard connected else {
-            throw TetherError("VPN gnirehtet chưa bật. Mở khóa điện thoại và bấm OK nếu Android hỏi quyền VPN.")
-        }
-        // The old system-wide proxy would send apps to the proxy a second time inside the tunnel.
-        let cleanup = """
-            settings put global http_proxy :0; svc wifi disable; svc data disable; \
-            for d in /data/local/tmp/phone-farm-proxy-*; do [ -d "$d" ] || continue; \
-            [ -f "$d/state.json" ] && CLASSPATH="$d/relay.dex" timeout 8 app_process /system/bin ProxyRelay stop "$d"; \
-            rm -rf "$d"; done; true
-            """
-        _ = await (try RunningCommand(adb, arguments: shell + [cleanup])).result(timeout: 30)
     }
 
-    /// Stops the gnirehtet VPN and turns Wi-Fi and mobile data back on, so the phone uses its own network.
-    static func disconnect(serial: String, adb: URL) async throws {
-        let stop = "am start -a com.genymobile.gnirehtet.STOP -n \(package)/.GnirehtetActivity >/dev/null 2>&1; "
-            + "sleep 1; am force-stop \(package); svc wifi enable; svc data enable; true"
-        let result = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", stop])).result(timeout: 30)
-        _ = await (try? RunningCommand(adb, arguments: ["-s", serial, "reverse", "--remove", "localabstract:gnirehtet"]))?
-            .result(timeout: 10)
-        guard result.status == 0 else {
-            throw TetherError("Không tắt được VPN gnirehtet trên điện thoại. " + result.diagnostics)
-        }
+    private static func installedVersionCode(serial: String, adb: URL) async -> Int {
+        guard let command = try? RunningCommand(adb, arguments: ["-s", serial, "shell", "dumpsys", "package", package]) else { return 0 }
+        let output = await command.result(timeout: 20, outputLimit: 400_000).output
+        guard let range = output.range(of: "versionCode=") else { return 0 }
+        return Int(output[range.upperBound...].prefix { $0.isNumber }) ?? 0
+    }
+
+    /// Stops the VPN app and starts it again with `extras`, then waits for its tunnel.
+    private static func restart(serial: String, adb: URL, extras: [String]) async throws {
+        let shell = ["-s", serial, "shell"]
+        _ = await (try RunningCommand(adb, arguments: shell + ["am", "force-stop", package])).result(timeout: 15)
         for _ in 0..<10 {
-            if !(await isConnected(adb: adb, serial: serial)) { return }
+            guard await isConnected(adb: adb, serial: serial) else { break }
             try await Task.sleep(for: .milliseconds(500))
         }
-        throw TetherError("VPN gnirehtet vẫn còn bật trên điện thoại.")
+        let start = await (try RunningCommand(adb, arguments: shell + ["am", "start", "-a", "com.genymobile.gnirehtet.START",
+                                                                      "-n", activity, "--esa", "dnsServers", "8.8.8.8,1.1.1.1"] + extras))
+            .result(timeout: 30)
+        guard start.status == 0, !start.output.contains("Error") else {
+            throw TetherError("Không khởi động được VPN trên điện thoại. " + start.diagnostics)
+        }
+        for _ in 0..<30 {
+            if await isConnected(adb: adb, serial: serial) { return }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        throw TetherError("VPN trên điện thoại chưa bật. Mở khóa điện thoại và bấm OK nếu Android hỏi quyền VPN.")
     }
 
     /// True when a connected VPN network uses gnirehtet's tun0 interface.

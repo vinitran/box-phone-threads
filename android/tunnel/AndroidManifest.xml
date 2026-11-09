@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phone Farm build of the gnirehtet client; installed as local.phonefarm.tunnel (see build.sh). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.genymobile.gnirehtet"
+    android:versionCode="100"
+    android:versionName="2.5.1-phonefarm1">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="29" />
+
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@null"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+        <activity
+            android:name="com.genymobile.gnirehtet.GnirehtetActivity"
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS"
+            android:theme="@style/Theme.Transparent">
+            <intent-filter>
+                <action android:name="com.genymobile.gnirehtet.START" />
+                <action android:name="com.genymobile.gnirehtet.STOP" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name="com.genymobile.gnirehtet.GnirehtetService"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>
