@@ -304,12 +304,10 @@ public final class ThreadsReader {
             if (request.has("photoCount") && request.optInt("photoCount") == 0 && (editor == null || composerCarousel(editor) != null)) return outcome("photos_changed");
             AccessibilityNodeInfo root = threadsRoot(automation);
             if (withPhoto) return openReplyGallery(automation, root);
-            AccessibilityNodeInfo submit = find(root, "new_thread_screen_post_button");
-            if (submit == null) return outcome("composer_unavailable");
+            if (find(root, "new_thread_screen_post_button") == null) return outcome("composer_unavailable");
             progress("sending_reply", 0, 0);
             if (postingWindowExpired(request)) return outcome("posting_window_ended");
-            if (!press(automation, submit)) return outcome("draft_failed");
-            return outcome("reply_submitted");
+            return sendReply(automation, "new_thread_screen_post_button", true);
         }
         for (int attempt = 0; attempt < 8; attempt++) {
             SystemClock.sleep(180);
@@ -322,11 +320,90 @@ public final class ThreadsReader {
             if (submit != null) {
                 progress("sending_reply", 0, 0);
                 if (postingWindowExpired(request)) return outcome("posting_window_ended");
-                if (!press(automation, submit)) return outcome("draft_failed");
-                return outcome("reply_submitted");
+                return sendReply(automation, "permalink_inline_composer_post_button", false);
             }
         }
         return outcome("draft_failed");
+    }
+
+    /**
+     * Taps a Post button and waits for Threads to take the reply. The keyboard opening or closing moves
+     * the button (in the full composer its resting spot is where Gboard's Enter key sits), so it is
+     * tapped only once its position holds still and nothing covers its centre: not the keyboard, the
+     * system bars or Threads' tab bar. The reply counts as sent only when the composer clears.
+     */
+    private static JSONObject sendReply(UiAutomation automation, String buttonID, boolean full) throws JSONException {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            AccessibilityNodeInfo button = settledButton(automation, buttonID);
+            if (button == null || !press(automation, button)) return outcome("draft_failed");
+            int sent = replySent(automation, full);
+            if (sent > 0) return outcome("reply_submitted");
+            // The draft is still there untouched: the tap missed. Only the full composer is retried,
+            // where a sent reply always closes the screen; elsewhere a second tap could post twice.
+            if (sent < 0 || !full) return outcome(sent < 0 ? "post_unconfirmed" : "draft_failed");
+            hideKeyboard(automation);
+        }
+        return outcome("draft_failed");
+    }
+
+    private static AccessibilityNodeInfo settledButton(UiAutomation automation, String id) {
+        Rect previous = null;
+        for (int attempt = 0; attempt < 16; attempt++) {
+            if (cancelled()) return null;
+            AccessibilityNodeInfo root = threadsRoot(automation);
+            AccessibilityNodeInfo button = find(root, id);
+            Rect rect = button == null ? null : bounds(button);
+            if (rect != null && rect.equals(previous) && button.isEnabled() && uncovered(automation, root, rect)) {
+                return button;
+            }
+            previous = rect;
+            SystemClock.sleep(200);
+        }
+        return null;
+    }
+
+    private static boolean uncovered(UiAutomation automation, AccessibilityNodeInfo root, Rect rect) {
+        int x = rect.centerX();
+        int y = rect.centerY();
+        if (rect.isEmpty() || !bounds(root).contains(x, y)) return false;
+        for (AccessibilityWindowInfo window : automation.getWindows()) {
+            if (window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+            Rect area = new Rect();
+            window.getBoundsInScreen(area);
+            if (area.contains(x, y)) return false;
+        }
+        return !onTabBar(root, x, y);
+    }
+
+    private static boolean onTabBar(AccessibilityNodeInfo node, int x, int y) {
+        if (node == null || !node.isVisibleToUser()) return false;
+        if (id(node).startsWith("barcelona_tab_") && bounds(node).contains(x, y)) return true;
+        for (int index = 0; index < node.getChildCount(); index++) {
+            if (onTabBar(node.getChild(index), x, y)) return true;
+        }
+        return false;
+    }
+
+    /** 1 once the composer clears, 0 while the draft stays open, -1 if Threads moved somewhere else. */
+    private static int replySent(UiAutomation automation, boolean full) {
+        int state = 0;
+        for (int attempt = 0; attempt < 30; attempt++) {
+            SystemClock.sleep(200);
+            AccessibilityNodeInfo root = threadsRoot(automation);
+            if (root == null) continue;
+            if (full) {
+                if (fullReplyScreen(root)) { state = 0; continue; }
+                boolean back = find(root, "PermalinkScreen") != null || find(root, "barcelona_tab_main_feed") != null;
+                if (back && find(root, "new_thread_screen_composer") == null) return 1;
+                state = -1;
+            } else {
+                AccessibilityNodeInfo editor = find(find(root, "PermalinkScreen"), "permalink_inline_composer");
+                if (editor == null) { state = -1; continue; }
+                if (editorText(editor).isEmpty() && composerCarousel(editor) == null) return 1;
+                state = 0;
+            }
+        }
+        return state;
     }
 
     private static boolean postingWindowExpired(JSONObject request) {

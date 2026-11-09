@@ -175,6 +175,8 @@ enum ThreadsAutomation {
             interactions.warning = "Bài đã chọn đang có bình luận chưa gửi."
         case "draft_failed":
             interactions.warning = "Chưa đăng được. Kiểm tra nội dung trong ô bình luận trên điện thoại."
+        case "post_unconfirmed":
+            interactions.warning = "Đã bấm Đăng nhưng Threads chuyển sang màn hình khác. Kiểm tra bình luận trên điện thoại."
         case "not_found":
             interactions.warning = "Chưa tìm lại được bài đã chọn trong feed."
         case "ambiguous", "target_changed":
