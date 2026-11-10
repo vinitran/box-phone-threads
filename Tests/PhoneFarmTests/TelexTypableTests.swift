@@ -44,4 +44,17 @@ final class TelexTypableTests: XCTestCase {
         XCTAssertGreaterThan(reply.count, 300)
         XCTAssertNoThrow(try Telex.keys(for: reply))
     }
+
+    func testADBFailuresSayWhatWentWrong() {
+        func reason(_ status: Int32, _ output: String, timeout: Int? = nil) -> String {
+            DiagnosticLog.adbReason(CommandResult(status: status, data: Data(output.utf8)), timeout: timeout)
+        }
+        XCTAssertEqual(reason(1, "adb: device offline"), "mất kết nối ADB với điện thoại")
+        XCTAssertEqual(reason(1, "adb: error: device 'abc123' not found"), "mất kết nối ADB với điện thoại")
+        XCTAssertEqual(reason(124, "", timeout: 120), "quá 120 giây mà chưa xong")
+        XCTAssertEqual(reason(15, ""), "ADB không phản hồi, app đã dừng lệnh")
+        XCTAssertEqual(reason(1, "Exception in thread \"main\" java.lang.ClassNotFoundException: ThreadsReader\n\tat x"),
+                       "lỗi trên điện thoại: Exception in thread \"main\" java.lang.ClassNotFoundException: ThreadsReader")
+        XCTAssertEqual(reason(0, "not json"), "điện thoại trả về kết quả không đọc được")
+    }
 }

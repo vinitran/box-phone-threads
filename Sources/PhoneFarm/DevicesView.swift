@@ -551,17 +551,17 @@ private struct DeviceCard: View {
                     .textSelection(.enabled)
                     .help(message)
             }
-            if message.contains("AI") {
+            if message.contains("AI") || message.contains("ADB") {
                 Button {
-                    AIReplyLog.copyReport(device: "\(manager.displayName(device)) (\(device.serial))", message: message)
+                    DiagnosticLog.copyReport(device: "\(manager.displayName(device)) (\(device.serial))", message: message)
                     copiedLog = true
                 } label: {
-                    Label(copiedLog ? "Đã sao chép" : "Sao chép log AI",
+                    Label(copiedLog ? "Đã sao chép" : "Sao chép log",
                           systemImage: copiedLog ? "checkmark" : "doc.on.doc")
                 }
                 .buttonStyle(.link)
                 .font(.caption)
-                .help("Sao chép nội dung AI đã trả về và lý do bị loại, để gửi cho người sửa lỗi")
+                .help("Sao chép chi tiết lỗi ADB và nội dung AI bị loại gần đây, để gửi cho người sửa lỗi")
                 .task(id: copiedLog) {
                     guard copiedLog else { return }
                     try? await Task.sleep(for: .seconds(2))

@@ -12,7 +12,7 @@ enum TypingError: LocalizedError {
     case calibration
     case screenshot
     case newlineUnavailable
-    case commandFailed
+    case commandFailed(String)
     case textChanged
 
     var errorDescription: String? {
@@ -26,7 +26,7 @@ enum TypingError: LocalizedError {
         case .calibration: return "Vị trí các phím chưa hợp lệ. Hãy chụp lại và bấm vào giữa từng phím theo hướng dẫn."
         case .screenshot: return "Không đọc được ảnh bàn phím Android."
         case .newlineUnavailable: return "Ô hiện tại không có phím xuống dòng. Hãy chọn một ô nhập nhiều dòng."
-        case .commandFailed: return "ADB không thực hiện được thao tác trên điện thoại."
+        case .commandFailed(let details): return "ADB không thực hiện được thao tác trên điện thoại (\(details))."
         case .textChanged: return "Gboard đã đổi nội dung vừa gõ. Hãy kiểm tra từ đang nhập trên điện thoại."
         }
     }
@@ -333,7 +333,7 @@ struct TelexTyping {
 
     private func readSystemKeys() async throws -> SystemKeyboard {
         let output = try await AndroidAccessibility.read(adb: adb, serial: serial, entry: .keyboard)
-        guard output.status == 0 else { throw TypingError.commandFailed }
+        guard output.status == 0 else { throw DiagnosticLog.adbFailure("đọc vị trí phím", serial: serial, result: output) }
         return SystemKeyboard(points: Self.systemKeys(from: output.output),
                               uppercase: output.output.split(whereSeparator: \.isNewline)
                                 .filter { $0 == "state\tuppercase\t1" }.count >= 26)
@@ -412,7 +412,7 @@ struct TelexTyping {
         try Task.checkCancellation()
         guard result.status == 0, let line = result.output.split(whereSeparator: \.isNewline).last,
               let status = try? JSONDecoder().decode(TypingResult.self, from: Data(line.utf8)) else {
-            throw TypingError.commandFailed
+            throw DiagnosticLog.adbFailure("gõ bình luận", serial: serial, result: result, timeout: timeout)
         }
         switch status.typingStatus {
         case "typed": return
@@ -420,7 +420,7 @@ struct TelexTyping {
         case "keyboard_unavailable": throw TypingError.wrongKeyboard
         case "editor_changed", "keyboard_changed", "draft_exists": throw TypingError.keyboardChanged
         case "text_changed": throw TypingError.textChanged
-        default: throw TypingError.commandFailed
+        default: throw DiagnosticLog.adbFailure("gõ bình luận, trạng thái \(status.typingStatus)", serial: serial, result: result, timeout: timeout)
         }
     }
 
@@ -468,7 +468,9 @@ struct TelexTyping {
         let process = try RunningCommand(adb, arguments: ["-s", serial] + arguments)
         let result = await process.result(timeout: 8)
         try Task.checkCancellation()
-        guard result.status == 0 else { throw TypingError.commandFailed }
+        guard result.status == 0 else {
+            throw DiagnosticLog.adbFailure("lệnh adb " + arguments.joined(separator: " ").prefix(60), serial: serial, result: result, timeout: 8)
+        }
         return result
     }
 }

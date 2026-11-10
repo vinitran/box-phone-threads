@@ -123,10 +123,11 @@ enum ThreadsComment {
             adb: adb, serial: serial, entry: .threadsAction, timeout: 120,
             payload: JSONEncoder().encode(request)
         ) { update in await progress(update.deviceProgress) }
-        guard output.status == 0, let line = output.output.split(whereSeparator: \.isNewline).last else {
-            throw TypingError.commandFailed
+        guard output.status == 0, let line = output.output.split(whereSeparator: \.isNewline).last,
+              let response = try? JSONDecoder().decode(Response.self, from: Data(line.utf8)) else {
+            let action = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])?["action"] as? String
+            throw DiagnosticLog.adbFailure("thao tác Threads \(action ?? "")", serial: serial, result: output, timeout: 120)
         }
-        let response = try JSONDecoder().decode(Response.self, from: Data(line.utf8))
         if response.actionStatus == "target_changed" {
             logger.error("Reply verification failed at \(response.phase ?? "unknown", privacy: .public): \(response.reason ?? "unknown", privacy: .public)")
         }

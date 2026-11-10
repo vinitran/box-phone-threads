@@ -15,7 +15,7 @@ enum ThreadsReplyAI {
         var errorDescription: String? {
             switch self {
             case .connection: "AI vẫn chưa phản hồi sau 5 lần thử lại, mỗi lần cách 30 giây. Hãy thử lại sau."
-            case .invalidReply: "AI trả về nội dung chưa dùng được (sai định dạng, chọn sai bài hoặc có link). Chưa có thao tác nào trên Threads, lượt sau sẽ hỏi lại. Bấm “Sao chép log AI” để lấy nội dung AI đã trả về."
+            case .invalidReply: "AI trả về nội dung chưa dùng được (sai định dạng, chọn sai bài hoặc có link). Chưa có thao tác nào trên Threads, lượt sau sẽ hỏi lại. Bấm “Sao chép log” để lấy nội dung AI đã trả về."
             }
         }
     }
@@ -105,7 +105,7 @@ enum ThreadsReplyAI {
             var like = decision.like
             if let chosen = like, !otherLikes.contains(where: { $0.index == chosen }) {
                 // A wrong like only skips this round's like; the reply itself is still usable.
-                AIReplyLog.record("đã tự sửa", reason: "like \(chosen) không thả tim được, bỏ qua lượt thả tim", raw: text)
+                DiagnosticLog.record("đã tự sửa", reason: "like \(chosen) không thả tim được, bỏ qua lượt thả tim", raw: text)
                 like = nil
             }
             let raw = decision.reply.text
@@ -120,7 +120,7 @@ enum ThreadsReplyAI {
                 continue
             }
             if reply != raw.trimmingCharacters(in: .whitespacesAndNewlines) {
-                AIReplyLog.record("đã tự sửa", reason: "bỏ hoặc đổi ký tự không gõ được, hoặc cắt cho đủ 450 ký tự", raw: raw, cleaned: reply)
+                DiagnosticLog.record("đã tự sửa", reason: "bỏ hoặc đổi ký tự không gõ được, hoặc cắt cho đủ 450 ký tự", raw: raw, cleaned: reply)
             }
             return Decision(like: like, reply: .init(index: decision.reply.index, text: reply))
         }
@@ -129,7 +129,7 @@ enum ThreadsReplyAI {
 
     private static func reject(_ reason: String, raw: String, cleaned: String? = nil) {
         logger.error("AI reply rejected: \(reason, privacy: .public)")
-        AIReplyLog.record("bị loại", reason: reason, raw: raw, cleaned: cleaned)
+        DiagnosticLog.record("bị loại", reason: reason, raw: raw, cleaned: cleaned)
     }
 
     /// Accepts the JSON even when the AI wraps it in ```json fences or adds words around it.
