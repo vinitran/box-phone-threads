@@ -335,6 +335,9 @@ public final class ThreadsReader {
     private static JSONObject sendReply(UiAutomation automation, String buttonID, boolean full) throws JSONException {
         for (int attempt = 0; attempt < 2; attempt++) {
             AccessibilityNodeInfo button = settledButton(automation, buttonID);
+            // With the keyboard closed the reply sheet can sit low enough that Post slides under the
+            // navigation bar. Focusing the editor brings the keyboard back, which lifts Post above it.
+            if (button == null && full && raiseFullComposer(automation)) button = settledButton(automation, buttonID);
             if (button == null || !press(automation, button)) return outcome("draft_failed");
             int sent = replySent(automation, full);
             if (sent > 0) return outcome("reply_submitted");
@@ -344,6 +347,20 @@ public final class ThreadsReader {
             hideKeyboard(automation);
         }
         return outcome("draft_failed");
+    }
+
+    private static boolean raiseFullComposer(UiAutomation automation) {
+        AccessibilityNodeInfo root = threadsRoot(automation);
+        if (!fullReplyScreen(root)) return false;
+        AccessibilityNodeInfo editor = revealFullReplyEditor(automation);
+        if (editor == null || !press(automation, editor)) return false;
+        for (int attempt = 0; attempt < 12; attempt++) {
+            SystemClock.sleep(200);
+            for (AccessibilityWindowInfo window : automation.getWindows()) {
+                if (window.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return true;
+            }
+        }
+        return false;
     }
 
     private static AccessibilityNodeInfo settledButton(UiAutomation automation, String id) {
