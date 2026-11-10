@@ -418,6 +418,7 @@ private struct DeviceCard: View {
     @State private var numberDraft = ""
     @State private var identityError: String?
     @State private var savingIdentity = false
+    @State private var copiedLog = false
 
     private var isRunning: Bool { manager.runningThreads.contains(device.id) }
     private var activity: DeviceManager.Activity? { manager.activities[device.id] }
@@ -549,6 +550,23 @@ private struct DeviceCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .help(message)
+            }
+            if message.contains("AI") {
+                Button {
+                    AIReplyLog.copyReport(device: "\(manager.displayName(device)) (\(device.serial))", message: message)
+                    copiedLog = true
+                } label: {
+                    Label(copiedLog ? "Đã sao chép" : "Sao chép log AI",
+                          systemImage: copiedLog ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .help("Sao chép nội dung AI đã trả về và lý do bị loại, để gửi cho người sửa lỗi")
+                .task(id: copiedLog) {
+                    guard copiedLog else { return }
+                    try? await Task.sleep(for: .seconds(2))
+                    copiedLog = false
+                }
             }
             if isRunning {
                 HStack(spacing: 8) {

@@ -97,20 +97,33 @@ enum Telex {
     }
 
     /// Rewrites AI text into what `keys(for:)` accepts: question and exclamation marks become
-    /// periods, other separators become commas or spaces, and quotes, brackets, emoji and other
-    /// symbols are dropped. Letters and digits are kept, so text that still needs them stays rejected.
+    /// periods, other separators become commas or spaces, numbers are spelled out in Vietnamese,
+    /// foreign letters lose their marks (ñ → n), and everything else the keyboard cannot type
+    /// (quotes, brackets, emoji, other scripts) is dropped.
     static func typable(_ text: String) -> String {
         var result = ""
-        for character in text {
+        for character in spellingNumbers(in: text) {
             switch character {
             case "?", "!", "…", "。", "？", "！": result.append(".")
             case ";", ":", "–", "—", "；", "：": result.append(",")
-            case "-", "/", "_", "|", "\t": result.append(" ")
+            case "-", "/", "_", "|", "\t", "+", "&", "=": result.append(" ")
+            case " ", ",", ".": result.append(character)
             default:
-                if character.isLetter || character.isNumber || character.isNewline
-                    || [" ", ",", "."].contains(character) { result.append(character) }
+                if character.isNewline { result.append("\n") }
+                else if character.isLetter {
+                    if (try? keys(for: String(character))) != nil { result.append(character) }
+                    else if let base = String(character).decomposedStringWithCanonicalMapping.unicodeScalars.first,
+                            base.isASCII, Character(base).isLetter { result.append(Character(base)) }
+                }
             }
         }
+        // A word Telex still cannot build (two tone marks, for example) loses its marks, or goes.
+        result = result.split(separator: " ", omittingEmptySubsequences: false).map { chunk in
+            let word = String(chunk)
+            if (try? keys(for: word)) != nil { return word }
+            let plain = word.folding(options: .diacriticInsensitive, locale: Locale(identifier: "vi_VN"))
+            return (try? keys(for: plain)) != nil ? plain : ""
+        }.joined(separator: " ")
         let rules: [(String, String)] = [
             (#"[ ]+([,.])"#, "$1"),          // no space before punctuation
             (#"([,.])[,. ]*\.[,. ]*"#, "."), // a run holding a period ends the sentence
@@ -123,6 +136,59 @@ enum Telex {
             result = result.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// "1.500" → "một nghìn năm trăm", "3,5" → "ba phẩy năm", "20%" → "hai mươi phần trăm".
+    static func spellingNumbers(in text: String) -> String {
+        var text = text.replacingOccurrences(of: #"(?<=\d)[.,](?=\d{3}(?!\d))"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?<=\d)[.,](?=\d)"#, with: " phẩy ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "%", with: " phần trăm ")
+        var result = ""
+        var digits = ""
+        func flush() {
+            guard !digits.isEmpty else { return }
+            let words = digits.count <= 12 ? spelled(Int(digits)!) : digits.compactMap(\.wholeNumberValue).map { units[$0] }.joined(separator: " ")
+            result += " " + words + " "
+            digits = ""
+        }
+        for character in text {
+            if character.isASCII, character.isNumber { digits.append(character) } else { flush(); result.append(character) }
+        }
+        flush()
+        return result
+    }
+
+    private static let units = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
+
+    static func spelled(_ number: Int) -> String {
+        guard number > 0 else { return "không" }
+        let scales = ["", "nghìn", "triệu", "tỷ", "nghìn tỷ"]
+        var groups: [Int] = []
+        var rest = number
+        while rest > 0 { groups.append(rest % 1000); rest /= 1000 }
+        var parts: [String] = []
+        for (index, group) in groups.enumerated().reversed() where group > 0 {
+            let full = index < groups.count - 1 // a group after a higher one reads its hundreds ("không trăm")
+            parts.append(([spelledGroup(group, full: full)] + (scales[index].isEmpty ? [] : [scales[index]])).joined(separator: " "))
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func spelledGroup(_ group: Int, full: Bool) -> String {
+        let (hundreds, tens, ones) = (group / 100, group / 10 % 10, group % 10)
+        var words: [String] = []
+        if full || hundreds > 0 { words.append(units[hundreds] + " trăm") }
+        switch tens {
+        case 0:
+            if ones > 0 { if !words.isEmpty { words.append("lẻ") }; words.append(units[ones]) }
+        case 1:
+            words.append("mười")
+            if ones > 0 { words.append(ones == 5 ? "lăm" : units[ones]) }
+        default:
+            words.append(units[tens] + " mươi")
+            if ones > 0 { words.append(ones == 1 ? "mốt" : ones == 4 ? "tư" : ones == 5 ? "lăm" : units[ones]) }
+        }
+        return words.joined(separator: " ")
     }
 }
 
