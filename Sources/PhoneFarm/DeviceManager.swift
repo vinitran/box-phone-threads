@@ -665,13 +665,14 @@ final class DeviceManager: ObservableObject {
         }
         do {
             let environment = try storage.threadsSettings().runEnvironment
+            var lastIssue: String?
             try await ThreadsLoop.run(round: { prepareFeed, cycle, ordinal, kind, deadline in
                 try Task.checkCancellation()
                 guard self.devices.contains(where: { $0.serial == device.serial && $0.isReady }) else {
-                    throw ThreadsLaunchError(errorDescription: "Điện thoại đã ngắt kết nối. Chu kỳ đã dừng.")
+                    throw ThreadsLaunchError(errorDescription: "Điện thoại đang ngắt kết nối ADB.")
                 }
                 if let reason = self.proxyBlockReason(device) {
-                    throw ThreadsLaunchError(errorDescription: reason + " Chu kỳ đã dừng.")
+                    throw ThreadsStopError(errorDescription: reason + " Chu kỳ đã dừng.")
                 }
                 let runID = try storage.startRun(device: device)
                 let prefix = "Chu kỳ \(cycle) · \(kind.title) · Lượt \(ordinal) · "
@@ -684,7 +685,8 @@ final class DeviceManager: ObservableObject {
                                                                                    completed: progress.completed, total: progress.total))
                     }
                     self.recordResult(device, runID: runID, message: prefix + result.message, hasIssue: result.hasIssue)
-                    return ThreadsLoop.Round(submitted: result.submitted, readyForNext: result.feedReady, message: result.message)
+                    return ThreadsLoop.Round(submitted: result.submitted, readyForNext: result.feedReady, message: result.message,
+                                             retryable: !result.mayHavePosted)
                 } catch {
                     self.recordResult(device, runID: runID, message: prefix + (Task.isCancelled ? "Đã dừng." : error.localizedDescription), hasIssue: true)
                     if Task.isCancelled { throw CancellationError() }
@@ -696,6 +698,14 @@ final class DeviceManager: ObservableObject {
                 let command = try RunningCommand(adb, arguments: ["-s", device.serial, "shell", "am", "force-stop", "--user", "current", "com.instagram.barcelona"])
                 let result = await command.result(timeout: 10)
                 guard result.status == 0 else { throw ThreadsLaunchError(errorDescription: "Chưa đóng được Threads để nghỉ.") }
+            }, recover: { reason in
+                guard let adb = ToolPaths.adb() else { return }
+                DiagnosticLog.record("Khởi động lại", reason: reason,
+                                     raw: "Dừng tiến trình điều khiển còn treo trên điện thoại và tắt Threads trước khi thử lại.", serial: device.serial)
+                // A reader the Mac gave up on can stay alive holding UiAutomation, which makes every later reader
+                // fail. The bracket keeps the pattern from matching this shell's own command line.
+                let restart = "pkill -f '[/]data/local/tmp/phone-farm-'; am force-stop --user current com.instagram.barcelona"
+                _ = await (try? RunningCommand(adb, arguments: ["-s", device.serial, "shell", restart]))?.result(timeout: 15)
             }, event: { event in
                 switch event {
                 case let .waiting(cycle, counts, slot, until):
@@ -706,16 +716,27 @@ final class DeviceManager: ObservableObject {
                     self.activities[device.id]?.startedAt = Date()
                     self.updateThreadsActivity(device, progress: DeviceProgress(message: "\(environment.title) · Chu kỳ \(cycle) · \(counts.label) · Đang chạy lượt \(slot.kind.title.lowercased())"))
                 case let .submitted(cycle, counts):
+                    lastIssue = nil
                     self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label)"))
                 case let .keepingOpen(cycle, counts, until):
                     self.nextThreadsRun[device.id] = until
                     self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Giữ Threads mở 1 phút trước khi thoát"))
                 case let .finishingWindow(cycle, counts, until):
                     self.nextThreadsRun[device.id] = until
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Đã tắt Threads · chờ hết khung 3 giờ"))
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Đã tắt Threads · chờ hết khung 3 giờ"
+                                                                               + (lastIssue.map { " · " + $0 } ?? "")))
                 case let .cycleResting(cycle, counts, until):
                     self.nextThreadsRun[device.id] = until
-                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Hết khung 3 giờ · nghỉ 4 giờ trước chu kỳ \(cycle + 1)"))
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Hết khung 3 giờ · nghỉ 4 giờ trước chu kỳ \(cycle + 1)"
+                                                                               + (lastIssue.map { " · " + $0 } ?? "")))
+                case let .retrying(cycle, counts, attempt, total, reason, until):
+                    self.nextThreadsRun[device.id] = until
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · Lỗi: \(reason) · Đã khởi động lại Threads, thử lại lần \(attempt)/\(total)"))
+                case let .skipped(cycle, counts, reason):
+                    lastIssue = "Lượt trước bị bỏ qua sau \(ThreadsLoop.retryDelays.count) lần thử lại. Lỗi cuối: \(reason)"
+                    self.updateThreadsActivity(device, progress: DeviceProgress(message: "Chu kỳ \(cycle) · \(counts.label) · " + lastIssue!))
+                case let .windowAbandoned(_, _, reason):
+                    lastIssue = "\(ThreadsLoop.failedSlotsBeforeRest) lượt liên tiếp lỗi, nghỉ đến chu kỳ sau rồi tự chạy lại. Lỗi cuối: \(reason)"
                 }
             })
         } catch {
@@ -725,6 +746,11 @@ final class DeviceManager: ObservableObject {
     }
 
     private struct ThreadsLaunchError: LocalizedError {
+        let errorDescription: String?
+    }
+
+    /// A problem retrying cannot fix (missing proxy settings), so the loop stops and shows it.
+    private struct ThreadsStopError: LocalizedError, ThreadsLoopStop {
         let errorDescription: String?
     }
 

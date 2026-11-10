@@ -1,10 +1,17 @@
 import Foundation
 
+/// An error the Threads loop must not retry: stop the loop and show it.
+protocol ThreadsLoopStop: Error {}
+
 @MainActor
 enum ThreadsLoop {
     nonisolated static let promotionsPerCycle = 5
     nonisolated static let activeSeconds = 3 * 60 * 60
     nonisolated static let cycleRestSeconds = 4 * 60 * 60
+    /// A failed round is retried after 1, 3 and 5 minutes, each time after `recover` restarted Threads.
+    nonisolated static let retryDelays = [60, 180, 300]
+    /// This many slots in a row failing every retry ends the 3-hour window early; the next cycle starts as usual.
+    nonisolated static let failedSlotsBeforeRest = 3
 
     struct Slot: Equatable {
         let kind: ThreadsCommentKind
@@ -26,6 +33,8 @@ enum ThreadsLoop {
         let submitted: Bool
         let readyForNext: Bool
         let message: String
+        /// False when Post may already have been tapped, so trying again could comment twice.
+        var retryable = true
     }
 
     enum Event {
@@ -35,6 +44,9 @@ enum ThreadsLoop {
         case keepingOpen(cycle: Int, counts: Counts, until: Date)
         case finishingWindow(cycle: Int, counts: Counts, until: Date)
         case cycleResting(cycle: Int, counts: Counts, until: Date)
+        case retrying(cycle: Int, counts: Counts, attempt: Int, of: Int, reason: String, until: Date)
+        case skipped(cycle: Int, counts: Counts, reason: String)
+        case windowAbandoned(cycle: Int, counts: Counts, reason: String)
     }
 
     struct LoopError: LocalizedError { let errorDescription: String? }
@@ -68,6 +80,7 @@ enum ThreadsLoop {
     static func run(
         round: (Bool, Int, Int, ThreadsCommentKind, Date) async throws -> Round,
         closeThreads: () async throws -> Void,
+        recover: (String) async -> Void = { _ in },
         event: (Event) -> Void,
         plan: () -> [Slot] = { makePlan() },
         cooldown: () -> Int = { Int.random(in: 180...300) },
@@ -89,34 +102,61 @@ enum ThreadsLoop {
             let slots = plan()
             var counts = Counts()
             var earliestNext = start
-            for slot in slots {
+            var failedSlots = 0
+            slots: for slot in slots {
                 let scheduled = max(start.addingTimeInterval(TimeInterval(slot.offset)), earliestNext)
                 guard scheduled < deadline, now() < deadline else { break }
                 if now() < scheduled {
                     event(.waiting(cycle: cycle, counts: counts, slot: slot, until: scheduled))
                     try await wait(until: scheduled)
                 }
-                guard now() < deadline else { break }
-                event(.starting(cycle: cycle, counts: counts, slot: slot, deadline: deadline))
-                let result: Round
-                do {
-                    result = try await round(true, cycle, counts.total + 1, slot.kind, deadline)
-                } catch is WindowEnded {
-                    break
+                var succeeded: Round?
+                var reason = ""
+                for attempt in 0...retryDelays.count {
+                    guard now() < deadline else { break slots }
+                    event(.starting(cycle: cycle, counts: counts, slot: slot, deadline: deadline))
+                    do {
+                        let result = try await round(true, cycle, counts.total + 1, slot.kind, deadline)
+                        if result.submitted { succeeded = result; break }
+                        reason = result.message
+                        if !result.retryable { break }
+                    } catch is WindowEnded {
+                        break slots
+                    } catch let error as ThreadsLoopStop {
+                        throw error
+                    } catch {
+                        try Task.checkCancellation()
+                        reason = error.localizedDescription
+                    }
+                    guard attempt < retryDelays.count else { break }
+                    let retryAt = now().addingTimeInterval(TimeInterval(retryDelays[attempt]))
+                    guard retryAt < deadline else { break slots }
+                    await recover(reason)
+                    event(.retrying(cycle: cycle, counts: counts, attempt: attempt + 1, of: retryDelays.count, reason: reason, until: retryAt))
+                    try await wait(until: retryAt)
                 }
-                guard result.submitted else {
-                    throw LoopError(errorDescription: "\(counts.label) · " + result.message)
+                guard succeeded != nil else {
+                    failedSlots += 1
+                    if failedSlots >= failedSlotsBeforeRest {
+                        event(.windowAbandoned(cycle: cycle, counts: counts, reason: reason))
+                        break slots
+                    }
+                    event(.skipped(cycle: cycle, counts: counts, reason: reason))
+                    try? await closeThreads()
+                    earliestNext = now().addingTimeInterval(TimeInterval(max(180, cooldown())))
+                    continue
                 }
+                failedSlots = 0
                 counts.record(slot.kind)
                 event(.submitted(cycle: cycle, counts: counts))
                 let finished = now()
                 let graceEnd = finished.addingTimeInterval(60)
                 event(.keepingOpen(cycle: cycle, counts: counts, until: graceEnd))
                 try await wait(until: graceEnd)
-                try await closeThreads()
+                try? await closeThreads()
                 earliestNext = finished.addingTimeInterval(TimeInterval(max(180, cooldown())))
             }
-            try await closeThreads()
+            try? await closeThreads()
             if now() < deadline {
                 event(.finishingWindow(cycle: cycle, counts: counts, until: deadline))
                 try await wait(until: deadline)

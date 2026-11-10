@@ -2,7 +2,7 @@ import XCTest
 @testable import PhoneFarm
 
 final class ThreadsLoopTests: XCTestCase {
-    private enum Stop: Error { case done }
+    private enum Stop: ThreadsLoopStop { case done }
 
     func testRandomPlansAlwaysHaveFivePromotionsFollowedByOneOrTwoReplies() {
         var schedules = Set<[Int]>()
@@ -120,20 +120,75 @@ final class ThreadsLoopTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedSendStopsWithoutCountingOrResting() async throws {
-        var submitted = false
-        var slept = false
+    func testFailedRoundRestartsAndRetriesThenSucceeds() async throws {
+        var clock = Date(timeIntervalSince1970: 0)
+        var calls = 0
+        var recoveries: [String] = []
+        var retryWaits: [Int] = []
+        var submittedCounts: [Int] = []
         do {
             try await ThreadsLoop.run(round: { _, _, _, _, _ in
-                .init(submitted: false, readyForNext: false, message: "draft exists")
+                calls += 1
+                if submittedCounts.count == 1 { throw Stop.done }
+                if calls == 1 { throw TypingError.commandFailed("test") }
+                if calls == 2 { return .init(submitted: false, readyForNext: false, message: "feed chưa tải") }
+                return .init(submitted: true, readyForNext: true, message: "ok")
+            }, closeThreads: {}, recover: { recoveries.append($0) }, event: { event in
+                if case let .retrying(_, _, _, _, _, until) = event { retryWaits.append(Int(until.timeIntervalSince(clock))) }
+                if case let .submitted(_, counts) = event { submittedCounts.append(counts.total) }
+            }, plan: { ThreadsLoop.makePlan { $0.lowerBound } }, now: { clock }, sleep: { clock.addTimeInterval(TimeInterval($0)) })
+            XCTFail("Expected test stop")
+        } catch Stop.done { }
+        XCTAssertEqual(recoveries.count, 2)
+        XCTAssertTrue(recoveries[0].contains("ADB"))
+        XCTAssertEqual(recoveries[1], "feed chưa tải")
+        XCTAssertEqual(retryWaits, [60, 180])
+        XCTAssertEqual(submittedCounts, [1])
+    }
+
+    @MainActor
+    func testSlotsThatKeepFailingAreSkippedThenTheWindowRests() async throws {
+        var clock = Date(timeIntervalSince1970: 0)
+        var calls: [Int] = []
+        var skipped = 0
+        var abandoned = 0
+        var rested = false
+        do {
+            try await ThreadsLoop.run(round: { _, cycle, _, _, _ in
+                if cycle == 2 { throw Stop.done }
+                calls.append(cycle)
+                return .init(submitted: false, readyForNext: false, message: "draft exists")
             }, closeThreads: {}, event: { event in
-                if case .submitted = event { submitted = true }
-                if case .cycleResting = event { XCTFail("Should stop on failed send") }
-            }, plan: { ThreadsLoop.makePlan { $0.lowerBound } }, sleep: { _ in slept = true })
-            XCTFail("Expected send failure")
-        } catch is ThreadsLoop.LoopError { }
-        XCTAssertFalse(submitted)
-        XCTAssertFalse(slept)
+                if case .skipped = event { skipped += 1 }
+                if case .windowAbandoned = event { abandoned += 1 }
+                if case .cycleResting = event { rested = true }
+                if case .submitted = event { XCTFail("Nothing was sent") }
+            }, plan: { ThreadsLoop.makePlan { $0.lowerBound } }, now: { clock }, sleep: { clock.addTimeInterval(TimeInterval($0)) })
+            XCTFail("Expected test stop")
+        } catch Stop.done { }
+        // Three slots, each tried once and retried three times, then the window rests until cycle 2.
+        XCTAssertEqual(calls.count, 12)
+        XCTAssertEqual(skipped, 2)
+        XCTAssertEqual(abandoned, 1)
+        XCTAssertTrue(rested)
+    }
+
+    @MainActor
+    func testUnconfirmedPostIsNotRetried() async throws {
+        var clock = Date(timeIntervalSince1970: 0)
+        var calls = 0
+        var retried = false
+        do {
+            try await ThreadsLoop.run(round: { _, _, _, _, _ in
+                calls += 1
+                if calls == 2 { throw Stop.done }
+                return .init(submitted: false, readyForNext: false, message: "post unconfirmed", retryable: false)
+            }, closeThreads: {}, event: { event in
+                if case .retrying = event { retried = true }
+            }, plan: { ThreadsLoop.makePlan { $0.lowerBound } }, now: { clock }, sleep: { clock.addTimeInterval(TimeInterval($0)) })
+        } catch Stop.done { }
+        XCTAssertFalse(retried)
+        XCTAssertEqual(calls, 2) // the next slot ran
     }
 
     @MainActor

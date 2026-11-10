@@ -34,6 +34,8 @@ enum ThreadsAutomation {
         let hasIssue: Bool
         var submitted = false
         var feedReady = false
+        /// Post was tapped but Threads did not confirm it, so the round must not be retried.
+        var mayHavePosted = false
     }
 
     private struct Interactions {
@@ -41,6 +43,7 @@ enum ThreadsAutomation {
         var replies = 0
         var warning: String?
         var needsNewPosts = false
+        var mayHavePosted = false
     }
 
     @MainActor
@@ -82,6 +85,7 @@ enum ThreadsAutomation {
         let warning = interactions.warning ?? scanWarning
         var result = Result(message: summary + (warning.map { " · " + $0 } ?? ""), hasIssue: warning != nil,
                             submitted: interactions.replies > 0)
+        result.mayHavePosted = interactions.mayHavePosted
         if result.submitted {
             progress(DeviceProgress(message: "Đã bấm Đăng · đang về Trang chủ và làm mới"))
             do {
@@ -176,6 +180,7 @@ enum ThreadsAutomation {
         case "draft_failed":
             interactions.warning = "Chưa đăng được. Kiểm tra nội dung trong ô bình luận trên điện thoại."
         case "post_unconfirmed":
+            interactions.mayHavePosted = true
             interactions.warning = "Đã bấm Đăng nhưng Threads chuyển sang màn hình khác. Kiểm tra bình luận trên điện thoại."
         case "not_found":
             interactions.warning = "Chưa tìm lại được bài đã chọn trong feed."
