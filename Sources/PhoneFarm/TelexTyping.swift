@@ -95,6 +95,35 @@ enum Telex {
         if let tone { keys.append(tone) }
         return keys
     }
+
+    /// Rewrites AI text into what `keys(for:)` accepts: question and exclamation marks become
+    /// periods, other separators become commas or spaces, and quotes, brackets, emoji and other
+    /// symbols are dropped. Letters and digits are kept, so text that still needs them stays rejected.
+    static func typable(_ text: String) -> String {
+        var result = ""
+        for character in text {
+            switch character {
+            case "?", "!", "…", "。", "？", "！": result.append(".")
+            case ";", ":", "–", "—", "；", "：": result.append(",")
+            case "-", "/", "_", "|", "\t": result.append(" ")
+            default:
+                if character.isLetter || character.isNumber || character.isNewline
+                    || [" ", ",", "."].contains(character) { result.append(character) }
+            }
+        }
+        let rules: [(String, String)] = [
+            (#"[ ]+([,.])"#, "$1"),          // no space before punctuation
+            (#"([,.])[,. ]*\.[,. ]*"#, "."), // a run holding a period ends the sentence
+            (#",[, ]*,"#, ","),              // repeated commas
+            (#"([,.])(?=[^\s,.])"#, "$1 "),  // space after punctuation
+            (#"[ ]{2,}"#, " "),
+            (#"(?m)^[ ,.]+|[ ,]+$"#, "")     // no line starts with punctuation or ends with a comma
+        ]
+        for (pattern, template) in rules {
+            result = result.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct KeyboardContext: Equatable {
