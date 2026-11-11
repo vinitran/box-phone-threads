@@ -48,6 +48,8 @@ enum ThreadsComment {
         kind: ThreadsCommentKind = .promotion, deadline: Date? = nil,
         progress: @escaping @MainActor @Sendable (DeviceProgress) -> Void
     ) async throws -> String {
+        let text = ThreadsCommentText.prepared(text)
+        guard !text.isEmpty else { return "invalid_reply" }
         let keys = try Telex.keys(for: text)
         try ThreadsLoop.checkDeadline(deadline)
         guard kind.allows(text) else { return "invalid_reply" }

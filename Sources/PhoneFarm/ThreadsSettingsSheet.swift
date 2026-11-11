@@ -7,19 +7,6 @@ struct ThreadsSettingsSheet: View {
     @State private var images: [URL] = []
     @State private var status = ""
     @State private var loaded = false
-    @State private var selectedPrompt = 0
-
-    private var promptText: Binding<String> {
-        Binding(get: {
-            if settings.runEnvironment == .dev { return settings.replyPrompt }
-            if let bank = settings.replyPrompts, bank.indices.contains(selectedPrompt) { return bank[selectedPrompt].text }
-            return settings.replyPrompt
-        }, set: { value in
-            if settings.runEnvironment == .dev { settings.replyPrompt = value; return }
-            if let bank = settings.replyPrompts, bank.indices.contains(selectedPrompt) { settings.replyPrompts?[selectedPrompt].text = value }
-            else { settings.replyPrompt = value }
-        })
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -29,7 +16,7 @@ struct ThreadsSettingsSheet: View {
             Picker("Chế độ chạy", selection: Binding(get: { settings.runEnvironment }, set: { settings.environment = $0 })) {
                 ForEach(ThreadsSettings.Environment.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
             }.pickerStyle(.segmented)
-            Text("Mỗi khung 3 giờ: 5 comment giới thiệu, sau mỗi lần là ngẫu nhiên 1–2 comment thông thường không ảnh. Giờ gửi được xếp ngẫu nhiên; hết khung nghỉ 4 giờ. Cả Dev và Production dùng lịch này, chỉ khác prompt giới thiệu.")
+            Text("Mỗi khung 3 giờ: 5 comment giới thiệu, sau mỗi lần là ngẫu nhiên 1–2 comment thông thường không ảnh. Giờ gửi được xếp ngẫu nhiên; hết khung nghỉ 4 giờ. Dev và Production dùng cùng lịch và cùng prompt cố định.")
                 .font(.caption).foregroundStyle(.secondary)
             TabView {
                 VStack(alignment: .leading, spacing: 10) {
@@ -42,26 +29,17 @@ struct ThreadsSettingsSheet: View {
                 }.padding(16).tabItem { Text("Chủ đề") }
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("Prompt trả lời bài viết").font(.headline)
+                        Text("Prompt giới thiệu cố định").font(.headline)
                         Spacer()
                         Button("Nhập file TXT…", action: importPrompt)
-                        Button("Nhập 10 prompt…", action: importPromptBank)
                     }
-                    if settings.runEnvironment == .dev {
-                        Text("Dev dùng prompt mặc định cho comment giới thiệu. Comment thông thường có prompt riêng không quảng bá.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if let bank = settings.replyPrompts {
-                        Picker("Xem / sửa prompt", selection: $selectedPrompt) {
-                            ForEach(Array(bank.enumerated()), id: \.element.id) { index, prompt in Text(prompt.name).tag(index) }
-                        }
-                        Text("Mỗi comment giới thiệu dùng ngẫu nhiên một trong \(bank.count) prompt. Comment thông thường dùng prompt riêng không quảng bá.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    TextEditor(text: promptText).accessibilityLabel("Prompt trả lời bài viết")
-                        .padding(6).border(.secondary.opacity(0.3))
-                    Text("\(promptText.wrappedValue.count) ký tự · lưu toàn bộ bộ prompt vào SQLite")
+                    Text("Dev và Production luôn dùng prompt dưới đây cho comment giới thiệu. Comment thông thường dùng prompt riêng không quảng bá.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Bình luận không dùng emoji hoặc icon. Số được viết bằng chữ để gõ Telex.")
+                    TextEditor(text: $settings.replyPrompt).accessibilityLabel("Prompt giới thiệu cố định")
+                        .padding(6).border(.secondary.opacity(0.3))
+                    Text("\(settings.replyPrompt.count) ký tự · lưu prompt cố định vào SQLite")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Bình luận không dùng emoji hoặc icon, không có dấu chấm ở cuối. Số được viết bằng chữ để gõ Telex.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(16).tabItem { Text("Prompt") }
                 VStack(alignment: .leading, spacing: 12) {
@@ -118,23 +96,8 @@ struct ThreadsSettingsSheet: View {
         panel.allowedContentTypes = [.plainText]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let file = panel.url else { return }
-        do { promptText.wrappedValue = try String(contentsOf: file, encoding: .utf8); status = "" }
+        do { settings.replyPrompt = try String(contentsOf: file, encoding: .utf8); status = "" }
         catch { status = error.localizedDescription }
-    }
-
-    private func importPromptBank() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText]
-        panel.allowsMultipleSelection = true
-        guard panel.runModal() == .OK else { return }
-        do {
-            guard panel.urls.count == 10 else { throw ThreadsSettings.SettingsError("Chọn đủ 10 file TXT.") }
-            settings.replyPrompts = try panel.urls.sorted { $0.lastPathComponent < $1.lastPathComponent }.map {
-                .init(id: UUID().uuidString, name: $0.lastPathComponent, text: try String(contentsOf: $0, encoding: .utf8))
-            }
-            selectedPrompt = 0
-            status = ""
-        } catch { status = error.localizedDescription }
     }
 
     private func chooseFolder() {

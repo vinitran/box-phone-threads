@@ -31,10 +31,7 @@ struct ThreadsSettings: Codable, Equatable {
     }
 
     func pickReplyPrompt() -> ReplyPrompt {
-        if runEnvironment == .dev {
-            return ReplyPrompt(id: "default", name: "Prompt mặc định · Dev", text: replyPrompt)
-        }
-        return replyPrompts?.randomElement() ?? ReplyPrompt(id: "custom", name: "Prompt mặc định", text: replyPrompt)
+        ReplyPrompt(id: "default", name: "Prompt cố định", text: replyPrompt)
     }
 
     static let defaultTopics = "mua sắm online, hỏi mua đồ, xin review, đánh giá sản phẩm, so sánh sản phẩm, săn sale, mã giảm giá, voucher, freeship, giỏ hàng, chốt đơn, shopee, sàn S, tiktok shop, tíc tóc, lazada, mua quà, đồ gia dụng, đồ dùng học tập, phụ kiện điện thoại, mỹ phẩm, skincare, quần áo, thời trang, outfit, váy, giày, túi xách, đồ ăn đặt online"
