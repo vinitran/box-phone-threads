@@ -25,6 +25,8 @@ enum ThreadsAutomation {
 
     private struct ActionResult: Decodable {
         let actionStatus: String
+        /// What the phone showed when the action failed (see screenSummary in ThreadsReader).
+        var screen: String?
     }
 
     private struct ScrollResult: Decodable { let scrolled: Bool }
@@ -57,10 +59,10 @@ enum ThreadsAutomation {
             progress(DeviceProgress(message: "Đang bấm Trang chủ và chờ feed"))
             let refresh: ActionResult = try await read(adb: adb, serial: serial, entry: .threadsRefresh, progress: progress)
             guard refresh.actionStatus == "home_ready" else {
-                let message = refresh.actionStatus == "draft_exists"
-                    ? "Threads đang có bình luận chưa gửi. Hãy xử lý bản nháp trên điện thoại."
-                    : "Feed chưa tải xong sau khi làm mới. Hãy thử lại."
-                return Result(message: message, hasIssue: true)
+                if refresh.actionStatus == "draft_exists" {
+                    return Result(message: "Threads đang có bình luận chưa gửi. Hãy xử lý bản nháp trên điện thoại.", hasIssue: true)
+                }
+                return Result(message: await feedFailure(refresh, adb: adb, serial: serial), hasIssue: true)
             }
         }
         progress(DeviceProgress(message: "Feed đã sẵn sàng · đang chọn ngẫu nhiên 5–10 bài để đọc"))
@@ -218,6 +220,24 @@ enum ThreadsAutomation {
         return result.actionStatus
     }
 
+    /// Says why the feed did not load, checks whether the phone still reaches the internet
+    /// through its proxy, and logs what was on screen.
+    private static func feedFailure(_ refresh: ActionResult, adb: URL, serial: String) async -> String {
+        let reason = switch refresh.actionStatus {
+        case "feed_unavailable": "Không thấy feed Trang chủ trên màn hình Threads"
+        case "refresh_timeout": "Feed Threads vẫn chưa tải xong sau 30 giây"
+        case "refresh_failed": "Không vuốt được feed Threads"
+        default: "Feed chưa tải xong sau khi làm mới (\(refresh.actionStatus))"
+        }
+        let ip = await USBTether.publicIP(adb: adb, serial: serial)
+        let network = ip == nil
+            ? "Điện thoại không ra được internet qua proxy, app sẽ nối lại mạng trước khi thử lại."
+            : "Mạng qua proxy vẫn hoạt động."
+        DiagnosticLog.record("Feed lỗi", reason: "\(reason) (\(refresh.actionStatus)). " + (ip.map { "IP qua proxy: \($0)" } ?? "Không ra được internet qua proxy"),
+                             raw: refresh.screen ?? "(điện thoại không gửi ảnh chụp màn hình)", serial: serial)
+        return reason + ". " + network
+    }
+
     private static func read<Result: Decodable>(
         adb: URL, serial: String, entry: AndroidAccessibility.Entry, payload: Data? = nil,
         progress: @escaping @MainActor @Sendable (DeviceProgress) -> Void
@@ -225,7 +245,7 @@ enum ThreadsAutomation {
         try Task.checkCancellation()
         let timeout: Int
         switch entry {
-        case .threadsRefresh, .threadsHomeAfterPost: timeout = 45
+        case .threadsRefresh, .threadsHomeAfterPost: timeout = 60
         case .threadsAutoFeed: timeout = 180
         case .threadsAction: timeout = 120
         default: timeout = 20

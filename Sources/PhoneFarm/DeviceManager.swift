@@ -672,7 +672,11 @@ final class DeviceManager: ObservableObject {
                     throw ThreadsLaunchError(errorDescription: "Điện thoại đang ngắt kết nối ADB.")
                 }
                 if let reason = self.proxyBlockReason(device) {
-                    throw ThreadsStopError(errorDescription: reason + " Chu kỳ đã dừng.")
+                    // A tunnel that is reconnecting or dropped can come back; only a phone without a proxy stops the loop.
+                    switch self.tether[device.id] {
+                    case .needsProxy, nil: throw ThreadsStopError(errorDescription: reason + " Chu kỳ đã dừng.")
+                    default: throw ThreadsLaunchError(errorDescription: reason)
+                    }
                 }
                 let runID = try storage.startRun(device: device)
                 let prefix = "Chu kỳ \(cycle) · \(kind.title) · Lượt \(ordinal) · "
@@ -706,6 +710,15 @@ final class DeviceManager: ObservableObject {
                 // fail. The bracket keeps the pattern from matching this shell's own command line.
                 let restart = "pkill -f '[/]data/local/tmp/phone-farm-'; am force-stop --user current com.instagram.barcelona"
                 _ = await (try? RunningCommand(adb, arguments: ["-s", device.serial, "shell", restart]))?.result(timeout: 15)
+                // No internet through the proxy (or a dropped tunnel): bring the VPN and relay up again.
+                guard self.devices.contains(where: { $0.id == device.id && $0.isReady }), self.tether[device.id] != .starting else { return }
+                var offline = false
+                if case .failed = self.tether[device.id] { offline = true }
+                if !offline { offline = await USBTether.publicIP(adb: adb, serial: device.serial) == nil }
+                guard offline else { return }
+                DiagnosticLog.record("Nối lại mạng", reason: "Điện thoại không ra được internet qua proxy",
+                                     raw: "Khởi động lại VPN và relay của điện thoại trước khi thử lại.", serial: device.serial)
+                await self.startTether(device)
             }, event: { event in
                 switch event {
                 case let .waiting(cycle, counts, slot, until):

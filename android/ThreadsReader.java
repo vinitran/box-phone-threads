@@ -852,7 +852,8 @@ public final class ThreadsReader {
         AccessibilityNodeInfo feed = getFeed(automation);
         if (feed == null) {
             AccessibilityNodeInfo editor = replyEditor(threadsRoot(automation));
-            return outcome(editor != null && !editorText(editor).isEmpty() ? "draft_exists" : "feed_unavailable");
+            if (editor != null && !editorText(editor).isEmpty()) return outcome("draft_exists");
+            return outcome("feed_unavailable").put("screen", screenSummary(automation));
         }
         String before = viewport(feed);
         if (!homeTapped) {
@@ -866,11 +867,12 @@ public final class ThreadsReader {
                 SystemClock.sleep(350);
                 home = find(threadsRoot(automation), "barcelona_tab_main_feed");
             }
-            if (home == null || !press(automation, home)) return outcome("feed_unavailable");
+            if (home == null || !press(automation, home)) return outcome("feed_unavailable").put("screen", screenSummary(automation));
         }
         progress("waiting_feed", 0, 0);
         long started = SystemClock.uptimeMillis();
-        long deadline = started + 20_000;
+        // A cold start through the proxy can take a while to fill the feed.
+        long deadline = started + 30_000;
         String previous = "";
         int stable = 0;
         boolean loadingSeen = false;
@@ -878,7 +880,7 @@ public final class ThreadsReader {
         while (SystemClock.uptimeMillis() < deadline) {
             SystemClock.sleep(300);
             feed = getFeed(automation);
-            if (feed == null) return outcome("feed_unavailable");
+            if (feed == null) return outcome("feed_unavailable").put("screen", screenSummary(automation));
             boolean loading = loadingAtTop(threadsRoot(automation), bounds(feed));
             loadingSeen |= loading;
             String current = viewport(feed);
@@ -891,7 +893,7 @@ public final class ThreadsReader {
                 feed = getFeed(automation);
                 if (feed == null) return outcome("feed_unavailable");
                 progress("initial_swipe", 0, 0);
-                if (!swipe(automation, bounds(feed), true)) return outcome("refresh_failed");
+                if (!swipe(automation, bounds(feed), true)) return outcome("refresh_failed").put("screen", screenSummary(automation));
                 SystemClock.sleep(ThreadLocalRandom.current().nextLong(300, 601));
                 return outcome("home_ready")
                     .put("homeTaps", 1).put("upSwipes", 1).put("pulls", 0)
@@ -899,7 +901,48 @@ public final class ThreadsReader {
                     .put("waitMilliseconds", SystemClock.uptimeMillis() - started);
             }
         }
-        return outcome("refresh_timeout");
+        return outcome("refresh_timeout").put("loadingSeen", loadingSeen).put("screen", screenSummary(automation));
+    }
+
+    /**
+     * What is on screen when the feed cannot be used: the app in front, every window, and the
+     * view ids and texts of Threads (or whatever covers it), so a failure can be diagnosed from the log.
+     */
+    private static String screenSummary(UiAutomation automation) {
+        StringBuilder out = new StringBuilder();
+        AccessibilityNodeInfo active = automation.getRootInActiveWindow();
+        out.append("active: ").append(active == null ? "none" : string(active.getPackageName()));
+        try {
+            for (AccessibilityWindowInfo window : automation.getWindows()) {
+                AccessibilityNodeInfo root = window.getRoot();
+                out.append("\nwindow type ").append(window.getType()).append(": ")
+                    .append(root == null ? "?" : string(root.getPackageName()));
+            }
+        } catch (RuntimeException ignored) {
+        }
+        AccessibilityNodeInfo root = threadsRoot(automation);
+        if (root == null) root = active;
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        List<String> texts = new ArrayList<>();
+        collectScreen(root, ids, texts, 0);
+        out.append("\nids: ").append(String.join(", ", ids));
+        out.append("\ntexts: ").append(String.join(" / ", texts));
+        return out.toString();
+    }
+
+    private static void collectScreen(AccessibilityNodeInfo node, LinkedHashSet<String> ids, List<String> texts, int depth) {
+        if (node == null || depth > 40 || ids.size() >= 80) return;
+        String id = id(node);
+        if (!id.isEmpty()) ids.add(id);
+        String text = string(node.getText());
+        if (text.isEmpty()) text = string(node.getContentDescription());
+        if (!text.isEmpty() && texts.size() < 30) {
+            text = text.replace('\n', ' ');
+            texts.add(text.length() > 60 ? text.substring(0, 60) : text);
+        }
+        for (int index = 0; index < node.getChildCount(); index++) {
+            collectScreen(node.getChild(index), ids, texts, depth + 1);
+        }
     }
 
     private static JSONObject homeAfterPost(UiAutomation automation) throws Exception {
