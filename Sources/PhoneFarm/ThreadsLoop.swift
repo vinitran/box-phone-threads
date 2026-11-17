@@ -3,6 +3,8 @@ import Foundation
 /// An error the Threads loop must not retry: stop the loop and show it.
 protocol ThreadsLoopStop: Error {}
 
+enum ThreadsRunContext { @TaskLocal static var deadline: Date? }
+
 @MainActor
 enum ThreadsLoop {
     nonisolated static let promotionsPerCycle = 5
@@ -54,8 +56,30 @@ enum ThreadsLoop {
         var errorDescription: String? { "Đã hết khung 3 giờ, không gửi thêm bình luận." }
     }
 
+    struct SliceEnded: Error, ThreadsLoopStop {}
+    struct CycleRest: Error { let until: Date }
+
+    /// Kept per account while a runner visits other profiles.
+    final class State {
+        var cycle = 1
+        var start: Date?
+        var slots: [Slot] = []
+        var nextSlot = 0
+        var counts = Counts()
+        var earliestNext = Date.distantPast
+        var failedSlots = 0
+        var graceEnd: Date?
+        var restUntil: Date?
+
+        func beginIfNeeded(at date: Date, plan: () -> [Slot]) {
+            guard start == nil else { return }
+            start = date; slots = plan(); earliestNext = date
+        }
+    }
+
     nonisolated static func checkDeadline(_ deadline: Date?, now: Date = Date()) throws {
         try Task.checkCancellation()
+        if let slice = ThreadsRunContext.deadline, now >= slice { throw SliceEnded() }
         if let deadline, now >= deadline { throw WindowEnded() }
     }
 
@@ -78,6 +102,8 @@ enum ThreadsLoop {
     }
 
     static func run(
+        state suppliedState: State? = nil,
+        yieldAtCycleRest: Bool = false,
         round: (Bool, Int, Int, ThreadsCommentKind, Date) async throws -> Round,
         closeThreads: () async throws -> Void,
         recover: (String) async -> Void = { _ in },
@@ -87,40 +113,64 @@ enum ThreadsLoop {
         now: () -> Date = Date.init,
         sleep: (Int) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
     ) async throws {
+        let state = suppliedState ?? State()
         func wait(until: Date) async throws {
             while now() < until {
-                try Task.checkCancellation()
+                try checkDeadline(nil, now: now())
                 try await sleep(min(60, max(1, Int(ceil(until.timeIntervalSince(now()))))))
             }
-            try Task.checkCancellation()
+            try checkDeadline(nil, now: now())
         }
-        var cycle = 1
         while true {
-            try Task.checkCancellation()
-            let start = now()
+            try checkDeadline(nil, now: now())
+            state.beginIfNeeded(at: now(), plan: plan)
+            let start = state.start!
+            let cycle = state.cycle
             let deadline = start.addingTimeInterval(TimeInterval(activeSeconds))
-            let slots = plan()
-            var counts = Counts()
-            var earliestNext = start
-            var failedSlots = 0
-            slots: for slot in slots {
-                let scheduled = max(start.addingTimeInterval(TimeInterval(slot.offset)), earliestNext)
+            if let resume = state.restUntil {
+                event(.cycleResting(cycle: cycle, counts: state.counts, until: resume))
+                // A completed window can hand the phone to another account. Its own four-hour
+                // rest continues on the wall clock while the other profile is active.
+                if yieldAtCycleRest, now() < resume { throw CycleRest(until: resume) }
+                try await wait(until: resume)
+                state.cycle += 1; state.start = nil; state.slots = []; state.nextSlot = 0
+                state.counts = Counts(); state.failedSlots = 0; state.restUntil = nil; state.graceEnd = nil
+                continue
+            }
+            if let grace = state.graceEnd {
+                if now() < grace {
+                    event(.keepingOpen(cycle: cycle, counts: state.counts, until: grace))
+                    try await wait(until: grace)
+                }
+                try? await closeThreads()
+                state.graceEnd = nil
+            }
+            slots: while state.nextSlot < state.slots.count {
+                let slot = state.slots[state.nextSlot]
+                let scheduled = max(start.addingTimeInterval(TimeInterval(slot.offset)), state.earliestNext)
                 guard scheduled < deadline, now() < deadline else { break }
                 if now() < scheduled {
-                    event(.waiting(cycle: cycle, counts: counts, slot: slot, until: scheduled))
+                    event(.waiting(cycle: cycle, counts: state.counts, slot: slot, until: scheduled))
                     try await wait(until: scheduled)
                 }
+                try checkDeadline(nil, now: now())
+                // Claim before starting a round. An interrupted or unconfirmed send must never
+                // repeat when this account is visited again.
+                state.nextSlot += 1
                 var succeeded: Round?
                 var reason = ""
                 for attempt in 0...retryDelays.count {
+                    try checkDeadline(nil, now: now())
                     guard now() < deadline else { break slots }
-                    event(.starting(cycle: cycle, counts: counts, slot: slot, deadline: deadline))
+                    event(.starting(cycle: cycle, counts: state.counts, slot: slot, deadline: deadline))
                     do {
-                        let result = try await round(true, cycle, counts.total + 1, slot.kind, deadline)
+                        let limit = min(deadline, ThreadsRunContext.deadline ?? deadline)
+                        let result = try await round(true, cycle, state.counts.total + 1, slot.kind, limit)
                         if result.submitted { succeeded = result; break }
                         reason = result.message
                         if !result.retryable { break }
                     } catch is WindowEnded {
+                        try checkDeadline(nil, now: now())
                         break slots
                     } catch let error as ThreadsLoopStop {
                         throw error
@@ -132,39 +182,38 @@ enum ThreadsLoop {
                     let retryAt = now().addingTimeInterval(TimeInterval(retryDelays[attempt]))
                     guard retryAt < deadline else { break slots }
                     await recover(reason)
-                    event(.retrying(cycle: cycle, counts: counts, attempt: attempt + 1, of: retryDelays.count, reason: reason, until: retryAt))
+                    event(.retrying(cycle: cycle, counts: state.counts, attempt: attempt + 1, of: retryDelays.count, reason: reason, until: retryAt))
                     try await wait(until: retryAt)
                 }
                 guard succeeded != nil else {
-                    failedSlots += 1
-                    if failedSlots >= failedSlotsBeforeRest {
-                        event(.windowAbandoned(cycle: cycle, counts: counts, reason: reason))
+                    state.failedSlots += 1
+                    if state.failedSlots >= failedSlotsBeforeRest {
+                        event(.windowAbandoned(cycle: cycle, counts: state.counts, reason: reason))
                         break slots
                     }
-                    event(.skipped(cycle: cycle, counts: counts, reason: reason))
+                    event(.skipped(cycle: cycle, counts: state.counts, reason: reason))
                     try? await closeThreads()
-                    earliestNext = now().addingTimeInterval(TimeInterval(max(180, cooldown())))
+                    state.earliestNext = now().addingTimeInterval(TimeInterval(max(180, cooldown())))
                     continue
                 }
-                failedSlots = 0
-                counts.record(slot.kind)
-                event(.submitted(cycle: cycle, counts: counts))
+                state.failedSlots = 0
+                state.counts.record(slot.kind)
+                event(.submitted(cycle: cycle, counts: state.counts))
                 let finished = now()
                 let graceEnd = finished.addingTimeInterval(60)
-                event(.keepingOpen(cycle: cycle, counts: counts, until: graceEnd))
+                state.graceEnd = graceEnd
+                state.earliestNext = finished.addingTimeInterval(TimeInterval(max(180, cooldown())))
+                event(.keepingOpen(cycle: cycle, counts: state.counts, until: graceEnd))
                 try await wait(until: graceEnd)
                 try? await closeThreads()
-                earliestNext = finished.addingTimeInterval(TimeInterval(max(180, cooldown())))
+                state.graceEnd = nil
             }
             try? await closeThreads()
             if now() < deadline {
-                event(.finishingWindow(cycle: cycle, counts: counts, until: deadline))
+                event(.finishingWindow(cycle: cycle, counts: state.counts, until: deadline))
                 try await wait(until: deadline)
             }
-            let resume = now().addingTimeInterval(TimeInterval(cycleRestSeconds))
-            event(.cycleResting(cycle: cycle, counts: counts, until: resume))
-            try await wait(until: resume)
-            cycle += 1
+            state.restUntil = now().addingTimeInterval(TimeInterval(cycleRestSeconds))
         }
     }
 }

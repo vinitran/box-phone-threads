@@ -27,7 +27,36 @@ final class AccessibilitySession {
         }
     }
 
+    private static void profileFailure(String reason) {
+        // Android's app_process can be killed after an uncaught Java exception without forwarding
+        // its stack trace to ADB. Emit a fixed, credential-free reason before aborting.
+        System.err.println("{\"error\":\"" + reason + "\"}");
+        System.err.flush();
+        throw new IllegalStateException(reason);
+    }
+
+    static void requireProfile() {
+        String until = System.getenv("PF_ACTION_DEADLINE");
+        if (until != null) {
+            try {
+                double expiry = Double.parseDouble(until);
+                if (!Double.isFinite(expiry) || System.currentTimeMillis() / 1000.0 >= expiry)
+                    profileFailure("session_expired");
+            } catch (NumberFormatException e) { profileFailure("session_expired"); }
+        }
+        String expected = System.getenv("PF_EXPECTED_USER");
+        if (expected == null) return;
+        try {
+            int current = (Integer) Class.forName("android.app.ActivityManager")
+                .getDeclaredMethod("getCurrentUser").invoke(null);
+            if (current != Integer.parseInt(expected)) profileFailure("profile_changed");
+        } catch (ReflectiveOperationException e) {
+            profileFailure("profile_check_failed");
+        }
+    }
+
     static void run(Operation operation) throws Exception {
+        requireProfile();
         HandlerThread callbacks = new HandlerThread("PhoneFarmAccessibility");
         callbacks.start();
         try {
@@ -45,6 +74,7 @@ final class AccessibilitySession {
                     | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
                 automation.setServiceInfo(service);
                 waitForWindows(automation);
+                requireProfile();
                 operation.run(automation);
             } finally {
                 UiAutomation.class.getMethod("disconnect").invoke(automation);

@@ -75,6 +75,8 @@ enum AndroidAccessibility {
             case "liking": message = "Đang thả tim"
             case "opening_composer": message = "Đang mở ô bình luận"
             case "opening_photos": message = "Đang mở thư viện ảnh"
+            case "waiting_photo_permission": message = "Chờ bạn cấp quyền ảnh trên điện thoại · còn \(max(0, (total ?? 15) - (completed ?? 0))) giây"
+            case "granting_photo_permission": message = "Đang cho phép Threads truy cập ảnh"
             case "selecting_photos": message = "Đang chọn \(count)/3 ảnh · app_store.png ở giữa"
             case "photos_ready": message = "Đã kiểm tra đủ 3 ảnh đúng thứ tự"
             case "sending_reply": message = "Đang gửi bình luận"
@@ -95,11 +97,16 @@ enum AndroidAccessibility {
         case threadsAction = "ThreadsReader action"
         case threadsProfile = "ThreadsReader profile"
         case proxyCheck = "ProxyCheck"
+        case deviceProfile = "DeviceProfileReader"
+        case gboardSetup = "GboardSetup"
+        case gboardSelect = "GboardSetup select"
     }
 
-    static func read(adb: URL, serial: String, entry: Entry, timeout: Int = 8, payload: Data? = nil,
+    static func read(adb: URL, serial: String, entry: Entry, timeout: Int = 8, payload: Data? = nil, readerURL: URL? = nil, expectedUser: Int? = nil,
                      onProgress: (@Sendable (Progress) async -> Void)? = nil) async throws -> CommandResult {
-        guard let reader = Bundle.main.url(forResource: "KeyboardReader", withExtension: "dex") else {
+        let session = try ROMRuntime.shared.session(serial)
+        try await ROMRuntime.checkForeground(session, adb: adb, serial: serial)
+        guard let reader = readerURL ?? Bundle.main.url(forResource: "KeyboardReader", withExtension: "dex") else {
             throw CocoaError(.fileNoSuchFile)
         }
         let remotePath = "/data/local/tmp/phone-farm-\(UUID().uuidString).dex"
@@ -125,7 +132,15 @@ enum AndroidAccessibility {
         } else {
             argument = payload.map { " " + $0.base64EncodedString() } ?? ""
         }
-        let script = "chmod 444 \(remotePath) && CLASSPATH=\(remotePath) timeout \(timeout) app_process /system/bin \(entry.rawValue)\(argument)"
+        if let expectedUser {
+            guard expectedUser >= 0 else { throw ROMError.wrongProfile }
+            let foreground = await (try RunningCommand(adb, arguments: device + ["shell", "am", "get-current-user"])).result(timeout: 8)
+            guard foreground.status == 0, Int(foreground.output.trimmingCharacters(in: .whitespacesAndNewlines)) == expectedUser,
+                  session == nil || session?.userID == expectedUser else { throw ROMError.wrongProfile }
+        }
+        let userEnvironment = (session?.userID ?? expectedUser).map { "PF_EXPECTED_USER=\($0) " } ?? ""
+        let timeEnvironment = ThreadsRunContext.deadline.map { "PF_ACTION_DEADLINE=\($0.timeIntervalSince1970) " } ?? ""
+        let script = "chmod 444 \(remotePath) && \(userEnvironment)\(timeEnvironment)CLASSPATH=\(remotePath) timeout \(timeout) app_process /system/bin \(entry.rawValue)\(argument)"
         try Task.checkCancellation()
         let command = try RunningCommand(adb, arguments: device + ["shell", script])
         let read = { @Sendable in await command.result(timeout: TimeInterval(timeout + 2), outputLimit: 256_000) { line in
@@ -134,12 +149,15 @@ enum AndroidAccessibility {
                   update.event == "progress" else { return }
             await onProgress(update)
         } }
-        return await withTaskCancellationHandler(operation: read, onCancel: {
+        let result = await withTaskCancellationHandler(operation: read, onCancel: {
             if let cancel = try? RunningCommand(adb, arguments: device + ["shell", "rm", "-f", remotePath]) {
                 Task { _ = await cancel.result(timeout: 8) }
             }
             if entry != .keyboardType { command.stop() }
         })
+        if session != nil && result.output.contains(#"{"error":"profile_changed"}"#) { throw ROMError.wrongProfile }
+        if result.output.contains(#"{"error":"session_expired"}"#) { throw ThreadsLoop.SliceEnded() }
+        return result
     }
 }
 
@@ -148,18 +166,25 @@ final class RunningCommand: Sendable {
     private let output = Pipe()
     private let exited = DispatchGroup()
 
-    init(_ executable: URL, arguments: [String], environment: [String: String]? = nil) throws {
+    init(_ executable: URL, arguments: [String], environment: [String: String]? = nil, input: Data? = nil) throws {
         process = Process()
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
+        let inputPipe = input.map { _ in Pipe() }
+        process.standardInput = inputPipe ?? (FileHandle.nullDevice as Any)
         process.standardOutput = output
         process.standardError = output
         exited.enter()
         process.terminationHandler = { [exited] _ in exited.leave() }
         do {
             try process.run()
+            if let inputPipe, let input {
+                DispatchQueue.global().async {
+                    try? inputPipe.fileHandleForWriting.write(contentsOf: input)
+                    try? inputPipe.fileHandleForWriting.close()
+                }
+            }
         } catch {
             exited.leave()
             throw error

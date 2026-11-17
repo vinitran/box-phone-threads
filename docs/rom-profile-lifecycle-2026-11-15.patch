@@ -1,0 +1,295 @@
+--- a/profile-manager/src/vn/romprofiles/Backend.java
++++ b/profile-manager/src/vn/romprofiles/Backend.java
+@@ -42,6 +42,12 @@
+         if(files!=null)for(File f:files)if(f.getName().matches("user-[0-9]+\\.json"))out.add(FilesUtil.json(f));
+         Collections.sort(out,(a,b)->Integer.compare(a.optInt("userId"),b.optInt("userId")));return out;
+     }
++    private static long androidUserSerial(int uid)throws Exception{
++        android.os.UserManager manager=(android.os.UserManager)NetworkProxy.systemContext().getSystemService(android.content.Context.USER_SERVICE);
++        long serial=manager.getSerialNumberForUser(android.os.UserHandle.getUserHandleForUid(uid*100000));
++        if(serial<0)throw new IllegalArgumentException("Android user no longer exists");
++        return serial;
++    }
+     private static void init()throws Exception{
+         BASE.mkdirs();PROFILES.mkdirs();BACKUPS.mkdirs();
+         cmd("chmod","700",BASE.getPath(),PROFILES.getPath(),BACKUPS.getPath());
+@@ -51,6 +57,10 @@
+             for(String p:new String[]{"ro.product.model","ro.product.manufacturer","ro.product.brand","ro.product.device","ro.product.name","ro.build.fingerprint","ro.build.display.id","ro.build.version.sdk","ro.build.version.release"})props.put(p,cmd("getprop",p));
+             save(new JSONObject().put("schemaVersion",1).put("id",UUID.randomUUID().toString()).put("userId",0).put("name","Máy gốc · Owner").put("createdAt",System.currentTimeMillis()).put("identity",identity).put("originalProperties",props).put("originalDeviceName",cmd("settings","get","global","device_name")).put("keptInPlace",true));
+         }
++        // Bind deletion to Android's non-reused generation, in addition to our own UUID.
++        for(JSONObject p:profiles())if(!p.has("androidUserSerial")&&!"deleting".equals(p.optString("state"))){
++            p.put("androidUserSerial",androidUserSerial(p.getInt("userId")));save(p);
++        }
+         NetworkProxy.captureOriginal();
+         for(JSONObject p:profiles())if(!p.has("proxy")){
+             p.put("proxy",p.getInt("userId")==0?FilesUtil.json(new File(BASE,"proxy-original.json")):NetworkProxy.none());save(p);
+@@ -58,6 +68,7 @@
+         // Upgrade only profiles already created with the new-user privacy policy.
+         // Owner and older saved users keep their original backup settings.
+         for(JSONObject p:profiles()){
++            if("deleting".equals(p.optString("state")))continue;
+             JSONObject policy=p.optJSONObject("privacyPolicy");
+             if(p.getInt("userId")!=0&&policy!=null&&!policy.optBoolean("backupServiceDeactivated")){
+                 p.put("privacyPolicy",configureFreshUser(p.getInt("userId")));save(p);
+@@ -71,14 +82,15 @@
+         for(String line:text.split("\n"))if(line.startsWith("package:"))result.add(line.substring(8).trim());return result;
+     }
+     private static JSONObject status()throws Exception{
+-        int active=current();JSONArray array=new JSONArray();
++        int active=current();JSONArray array=new JSONArray();boolean generationsKnown=true;
+         for(JSONObject p:profiles()){
++            generationsKnown&=p.has("androidUserSerial");
+             JSONObject row=new JSONObject(p.toString());row.put("active",p.getInt("userId")==active);array.put(row);
+             row.put("proxy",NetworkProxy.redact(p.optJSONObject("proxy")));
+         }
+         String health="unavailable";
+         try {health=FilesUtil.command(20,VECTOR,"--json","status");}catch(Exception ignored){}
+-        JSONObject out=new JSONObject().put("ok",true).put("activeUser",active).put("profiles",array).put("framework",health).put("maxProfiles",16).put("networkGuard",NetworkGuard.status()).put("wifiRadio",WifiRadio.status()).put("bluetoothRadio",BluetoothRadio.status());
++        JSONObject out=new JSONObject().put("ok",true).put("activeUser",active).put("profiles",array).put("capabilities",new JSONArray(generationsKnown?Arrays.asList("profile.create","profile.delete","profile.reconcile"):Arrays.asList("profile.create","profile.reconcile"))).put("framework",health).put("maxProfiles",16).put("networkGuard",NetworkGuard.status()).put("wifiRadio",WifiRadio.status()).put("bluetoothRadio",BluetoothRadio.status());
+         File op=new File(BASE,"operation.json");if(op.exists())out.put("operation",FilesUtil.json(op));return out;
+     }
+     private static void mirror(int uid)throws Exception{
+@@ -113,6 +125,7 @@
+             if(app.optString("APP_PACKAGE").equals("android")&&app.optInt("USER_ID")==0)FilesUtil.command(20,VECTOR,"--json","scope","rm",FilesUtil.PKG,"android/0");
+         }
+         for(JSONObject p:profiles()){
++            if("deleting".equals(p.optString("state")))continue;
+             int uid=p.getInt("userId");
+             for(String pkg:packages(uid,true)){
+                 if(pkg.equals(FilesUtil.PKG)||pkg.equals("com.topjohnwu.magisk")||pkg.contains("inputmethod"))continue;
+@@ -209,17 +222,18 @@
+             .put("automaticRestoreSettingDisabled",true).put("backupEnabledSettingDisabled",true).put("backupServiceDeactivated",true);
+     }
+     private static JSONObject create(JSONObject options)throws Exception{
++        String requestedName=options.optString("name","").trim();if(requestedName.length()>80||requestedName.indexOf('\n')>=0||requestedName.indexOf('\r')>=0)throw new IllegalArgumentException("Invalid profile name");
+         JSONObject proxy=NetworkProxy.prepare(options!=null&&options.has("proxy")?options.optJSONObject("proxy"):profile(current()).optJSONObject("proxy"));
+         if(!"none".equals(proxy.getString("type")))NetworkProxy.test(proxy);
+         if(profiles().size()>=16)throw new IOException("Giới hạn 16 profile; tool không tự xóa profile cũ.");
+         int before=current();backup(before);
+         event("create","Đang tạo môi trường Android riêng");
+-        String name="ROM Profile "+String.format(Locale.ROOT,"%02d",profiles().size());
++        String name=options.optString("name","").trim();if(name.isEmpty())name="ROM Profile "+String.format(Locale.ROOT,"%02d",profiles().size());
+         String output=cmd("pm","create-user",name);Matcher m=Pattern.compile("(?:id|ID) (\\d+)").matcher(output);
+         if(!m.find())throw new IOException("Không tạo được user: "+output);
+         int uid=Integer.parseInt(m.group(1));
+         JSONObject p=new JSONObject().put("schemaVersion",1).put("id",UUID.randomUUID().toString()).put("name",name).put("userId",uid)
+-            .put("createdAt",System.currentTimeMillis()).put("identity",identity(uid)).put("proxy",proxy).put("keptInPlace",true).put("state","initializing");save(p);
++            .put("createdAt",System.currentTimeMillis()).put("androidUserSerial",androidUserSerial(uid)).put("identity",identity(uid)).put("proxy",proxy).put("keptInPlace",true).put("state","initializing");save(p);
+         // A failed setup keeps this user and the original user intact for recovery.
+         cmd("am","start-user","-w",String.valueOf(uid));
+         p.put("privacyPolicy",configureFreshUser(uid));save(p);
+@@ -236,7 +250,7 @@
+         activate(uid,false);return new JSONObject().put("ok",true).put("userId",uid).put("name",name);
+     }
+     private static JSONObject activate(int uid,boolean doBackup)throws Exception{
+-        JSONObject p=profile(uid);int old=current();
++        JSONObject p=profile(uid);if("deleting".equals(p.optString("state")))throw new IOException("Profile deletion is pending");int old=current();
+         if(old==uid){
+             int power=BluetoothRadio.suspendForUserSwitch();
+             try{NetworkProxy.apply(p.optJSONObject("proxy"),uid);WifiRadio.apply(p);BluetoothRadio.apply(p,power);}
+@@ -343,6 +357,58 @@
+             .put(new JSONObject().put("source","network_routing").put("status","enforced".equals(profile(uid).optJSONObject("proxy").optString("routing"))?"tcp_dns_enforced_udp_ipv6_blocked":"global_http_proxy_not_full_tunnel"));
+         return new JSONObject().put("ok",true).put("userId",uid).put("fullyNewPhysicalDevice",false).put("allOldInformationEliminated",false).put("javaVerification",tested).put("findings",findings).put("proxy",NetworkProxy.redact(profile(uid).optJSONObject("proxy"))).put("wifiRadio",WifiRadio.status()).put("bluetoothRadio",bluetooth).put("networkGuard",NetworkGuard.status());
+     }
++    private static boolean androidUserExists(int uid)throws Exception{
++        String users=FilesUtil.command(5,"pm","list","users");
++        return Pattern.compile("UserInfo\\{"+uid+":").matcher(users).find();
++    }
++    private static final ProfileDeletion.Operations DELETE_OPS=new ProfileDeletion.Operations(){
++        public int currentUser()throws Exception{return current();}
++        public String profileId(int uid)throws Exception{
++            JSONObject p=profile(uid);
++            if(!p.has("androidUserSerial")||p.getLong("androidUserSerial")!=androidUserSerial(uid))throw new IllegalArgumentException("Android user generation changed");
++            return p.getString("id");
++        }
++        public boolean pending(int uid)throws Exception{return "deleting".equals(profile(uid).optString("state"));}
++        public void backup(int uid)throws Exception{Backend.backup(uid);}
++        public void markPending(int uid)throws Exception{
++            JSONObject p=profile(uid);p.put("state","deleting").put("deleteRequestedAt",System.currentTimeMillis());save(p);
++        }
++        public void removeUser(int uid)throws Exception{
++            FilesUtil.command(60,"pm","remove-user",String.valueOf(uid));
++            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(45);
++            while(androidUserExists(uid)&&System.nanoTime()<deadline)Thread.sleep(250);
++        }
++        public boolean userExists(int uid)throws Exception{return androidUserExists(uid);}
++        public void retire(int uid,String id)throws Exception{
++            JSONObject p=profile(uid);if(!id.equals(p.getString("id")))throw new IOException("Profile UUID changed");
++            if(uid==current()||androidUserExists(uid))throw new IOException("Android user still exists");
++            File dir=new File(BASE,"deleted-profiles");dir.mkdirs();cmd("chmod","700",dir.getPath());
++            File target=new File(dir,id+"-user-"+uid+".json");
++            if(!profileFile(uid).renameTo(target))throw new IOException("Could not retire deleted profile metadata");
++            // Android removed only this user's app data. Archives remain root-private and untouched.
++            try{
++                JSONObject scopes=new JSONObject(FilesUtil.command(20,VECTOR,"--json","scope","ls",FilesUtil.PKG));
++                JSONArray entries=scopes.optJSONArray("data");
++                if(entries!=null)for(int i=0;i<entries.length();i++){
++                    JSONObject app=entries.getJSONObject(i);
++                    String pkg=app.optString("APP_PACKAGE");
++                    if(app.optInt("USER_ID",-1)==uid&&pkg.matches("[A-Za-z0-9_.]+"))
++                        FilesUtil.command(20,VECTOR,"--json","scope","rm",FilesUtil.PKG,pkg+"/"+uid);
++                }
++            }catch(Exception ignored){} // Stale scopes cannot activate a retired Android user.
++        }
++    };
++    private static JSONObject deleteProfile(int uid,JSONObject request)throws Exception{
++        ProfileDeletion.run(uid,request.optString("expectedProfileId",null),request.optBoolean("confirmDeletion",false),DELETE_OPS);
++        return new JSONObject().put("ok",true).put("deleted",true).put("userId",uid).put("backupKept",true);
++    }
++    private static JSONObject reconcileDeletions()throws Exception{
++        int pending=0,retired=0;
++        for(JSONObject p:profiles())if("deleting".equals(p.optString("state"))){
++            if(ProfileDeletion.reconcile(p.getInt("userId"),p.getString("id"),DELETE_OPS))retired++;else pending++;
++        }
++        return new JSONObject().put("ok",true).put("pending",pending).put("retired",retired);
++    }
+     private static JSONObject resume()throws Exception{
+         File file=new File(BASE,"active.json");
+         if(!file.exists())return new JSONObject().put("ok",true).put("resumed",false);
+@@ -363,6 +429,7 @@
+                 switch(operation){
+                     case "profile.list":action="status";break;case "profile.create":action="create";break;
+                     case "profile.activate":case "profile.restore":action="switch";break;
++                    case "profile.delete":action="delete";break;case "profile.reconcile":action="reconcile";break;
+                     case "profile.backup":action="backup";break;case "profile.verify":action="verify";break;
+                     case "profile.audit":action="audit";break;case "imei.generate":action="imei-generate";break;
+                     case "apps.sync":action="sync";break;case "proxy.set":action="proxy-set";break;
+@@ -380,7 +447,8 @@
+                     switch(action){
+                         case "status":result=status();break;
+                         case "create":result=create(request);break;
+-                        case "switch":result=activate(uid,request.optBoolean("backupCurrent",true));break;
++                        case "switch":if(request.has("expectedProfileId")&&!request.getString("expectedProfileId").equals(profile(uid).getString("id")))throw new IllegalArgumentException("Profile UUID changed");result=activate(uid,request.optBoolean("backupCurrent",true));break;
++                        case "delete":result=deleteProfile(uid,request);break;case "reconcile":result=reconcileDeletions();break;
+                         case "resume":result=resume();break;
+                         case "backup":result=backup(uid);break;
+                         case "sync":result=sync();break;
+@@ -407,7 +475,7 @@
+                 // Android JSON parser exceptions can echo the entire request, including secrets.
+                 String message=e instanceof JSONException?"Malformed request or profile JSON":String.valueOf(e.getMessage());
+                 boolean busy=e instanceof IOException&&message.startsWith("BUSY:");
+-                String code=busy?"BUSY":e instanceof IllegalArgumentException||e instanceof JSONException?"INVALID_ARGUMENT":e instanceof SecurityException?"ROOT_REQUIRED":"DEVICE_ERROR";
++                String code=e instanceof ProfileDeletion.Pending?"RESULT_UNKNOWN":busy?"BUSY":e instanceof IllegalArgumentException||e instanceof JSONException?"INVALID_ARGUMENT":e instanceof SecurityException?"ROOT_REQUIRED":"DEVICE_ERROR";
+                 if(!busy&&!failedAction.equals("status")&&!failedAction.equals("identity"))event("error",message);
+                 System.out.println(new JSONObject().put("ok",false).put("apiVersion",1).put("errorCode",code).put("error",message));
+             }catch(Exception ignored){System.out.println("{\"ok\":false,\"errorCode\":\"DEVICE_ERROR\",\"error\":\"Backend failed\"}");}
+--- a/profile-manager/AndroidManifest.xml
++++ b/profile-manager/AndroidManifest.xml
+@@ -1,4 +1,4 @@
+-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="vn.romprofiles" android:versionCode="7" android:versionName="1.4.2">
++<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="vn.romprofiles" android:versionCode="8" android:versionName="1.5.0">
+     <uses-sdk android:minSdkVersion="27" android:targetSdkVersion="29" />
+     <application android:label="ROM Profiles" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:icon="@android:drawable/ic_menu_myplaces">
+         <activity android:name=".MainActivity" android:exported="true">
+--- /dev/null
++++ b/profile-manager/src/vn/romprofiles/ProfileDeletion.java
+@@ -0,0 +1,51 @@
++package vn.romprofiles;
++
++import java.io.IOException;
++import java.util.UUID;
++
++/** Pure orchestration: archive first, bind the exact UUID, never repeat an uncertain removal. */
++public final class ProfileDeletion {
++    public interface Operations {
++        int currentUser() throws Exception;
++        String profileId(int uid) throws Exception;
++        boolean pending(int uid) throws Exception;
++        void backup(int uid) throws Exception;
++        void markPending(int uid) throws Exception;
++        void removeUser(int uid) throws Exception;
++        boolean userExists(int uid) throws Exception;
++        void retire(int uid, String id) throws Exception;
++    }
++    public static final class Pending extends IOException {
++        public Pending(){super("Deletion result not yet confirmed; reconcile state before any retry");}
++    }
++    private static void validate(int uid,String expected,boolean confirmed,Operations ops)throws Exception{
++        if(uid<=0)throw new IllegalArgumentException("Owner cannot be deleted");
++        if(!confirmed)throw new IllegalArgumentException("Explicit deletion confirmation is required");
++        if(expected==null)throw new IllegalArgumentException("Expected profile UUID is required");
++        UUID.fromString(expected);
++        if(!expected.equals(ops.profileId(uid)))throw new IllegalArgumentException("Profile UUID changed");
++        if(uid==ops.currentUser())throw new IllegalArgumentException("Switch to another profile before deleting");
++    }
++    public static void run(int uid,String expected,boolean confirmed,Operations ops)throws Exception{
++        validate(uid,expected,confirmed,ops);
++        if(ops.pending(uid))throw new Pending();
++        ops.backup(uid);  // Must finish and verify the archive before Android is asked to remove anything.
++        validate(uid,expected,confirmed,ops);
++        ops.markPending(uid);
++        try {
++            validate(uid,expected,confirmed,ops);
++            ops.removeUser(uid);
++        } catch(Exception ignored) {
++            // The command can fail after committing. Only read-back may settle the result.
++        }
++        try {
++            if(!ops.userExists(uid)){ops.retire(uid,expected);return;}
++        } catch(Exception ignored) {}
++        throw new Pending();
++    }
++    public static boolean reconcile(int uid,String id,Operations ops)throws Exception{
++        if(!ops.pending(uid))return true;
++        if(ops.userExists(uid))return false;
++        ops.retire(uid,id);return true;
++    }
++}
+--- /dev/null
++++ b/tools/test_profile_deletion.py
+@@ -0,0 +1,41 @@
++#!/usr/bin/env python3
++"""Run the real deletion orchestrator against deterministic Android/storage fixtures; no ADB."""
++from pathlib import Path
++import subprocess,tempfile
++source=Path(__file__).resolve().parents[1]/'profile-manager/src/vn/romprofiles/ProfileDeletion.java'
++program=r'''import vn.romprofiles.ProfileDeletion;
++import java.util.*;
++public class DeletionWorkflowTest {
++ static final String A="11111111-1111-4111-8111-111111111111", B="22222222-2222-4222-8222-222222222222";
++ static class Ops implements ProfileDeletion.Operations {
++  int active=15,backup=0,remove=0,retire=0; boolean pending=false,exists=true,failBackup=false,timeoutAfterCommit=false,leavePresent=false,reuseAfterBackup=false,activateAfterBackup=false,failRetire=false,generationChanged=false,changeGenerationAfterBackup=false;
++  String id=A;
++  public int currentUser(){return active;}
++  public String profileId(int u){if(generationChanged)throw new IllegalArgumentException("Android user generation changed");return id;}
++  public boolean pending(int u){return pending;}
++  public void backup(int u)throws Exception{backup++;if(failBackup)throw new Exception("archive verification failed");if(reuseAfterBackup)id=B;if(activateAfterBackup)active=u;if(changeGenerationAfterBackup)generationChanged=true;}
++  public void markPending(int u){pending=true;}
++  public void removeUser(int u)throws Exception{remove++;if(!leavePresent)exists=false;if(timeoutAfterCommit)throw new Exception("lost response after commit");}
++  public boolean userExists(int u){return exists;}
++  public void retire(int u,String expected)throws Exception{if(failRetire)throw new Exception("storage commit failed");check(id.equals(expected));retire++;pending=false;}
++ }
++ static void check(boolean value){if(!value)throw new AssertionError();}
++ interface Call {void run()throws Exception;}
++ static void rejects(Call c)throws Exception{try{c.run();throw new AssertionError("must reject");}catch(IllegalArgumentException expected){}}
++ static void pending(Call c)throws Exception{try{c.run();throw new AssertionError("must reconcile");}catch(ProfileDeletion.Pending expected){}}
++ public static void main(String[] args)throws Exception{
++  Ops o=new Ops();rejects(()->ProfileDeletion.run(0,A,true,o));rejects(()->ProfileDeletion.run(15,A,true,o));rejects(()->ProfileDeletion.run(10,A,false,o));rejects(()->ProfileDeletion.run(10,B,true,o));check(o.backup==0&&o.remove==0);
++  Ops fail=new Ops();fail.failBackup=true;try{ProfileDeletion.run(10,A,true,fail);throw new AssertionError();}catch(Exception expected){check(fail.backup==1&&fail.remove==0&&!fail.pending);}
++  Ops commit=new Ops();commit.timeoutAfterCommit=true;ProfileDeletion.run(10,A,true,commit);check(commit.backup==1&&commit.remove==1&&commit.retire==1);
++  Ops async=new Ops();async.leavePresent=true;pending(()->ProfileDeletion.run(10,A,true,async));pending(()->ProfileDeletion.run(10,A,true,async));check(async.backup==1&&async.remove==1&&async.pending);check(!ProfileDeletion.reconcile(10,A,async));check(async.remove==1);async.exists=false;check(ProfileDeletion.reconcile(10,A,async));check(async.retire==1&&async.remove==1);
++  Ops reuse=new Ops();reuse.reuseAfterBackup=true;rejects(()->ProfileDeletion.run(10,A,true,reuse));check(reuse.remove==0&&!reuse.pending);
++  Ops active=new Ops();active.activateAfterBackup=true;rejects(()->ProfileDeletion.run(10,A,true,active));check(active.remove==0&&!active.pending);
++  Ops generation=new Ops();generation.changeGenerationAfterBackup=true;rejects(()->ProfileDeletion.run(10,A,true,generation));check(generation.remove==0&&!generation.pending);
++  Ops storage=new Ops();storage.failRetire=true;pending(()->ProfileDeletion.run(10,A,true,storage));storage.failRetire=false;check(ProfileDeletion.reconcile(10,A,storage));check(storage.remove==1&&storage.retire==1);
++  System.out.println("PASS: owner/active/confirmation/UUID guards, backup failure, UUID reuse, active-user race, unknown removal, no duplicate deletion, deferred retirement");
++ }
++}'''
++with tempfile.TemporaryDirectory(prefix='rom-delete-qa-') as tmp:
++ p=Path(tmp);(p/'DeletionWorkflowTest.java').write_text(program)
++ subprocess.run(['javac','-d',str(p),str(source),str(p/'DeletionWorkflowTest.java')],check=True)
++ subprocess.run(['java','-cp',str(p),'DeletionWorkflowTest'],check=True)
+--- a/rom_profiles_sdk.py
++++ b/rom_profiles_sdk.py
+@@ -66,6 +66,10 @@
+     def activate_profile(self,user_id:int,backup_current=True):return self._call('profile.activate',userId=user_id,backupCurrent=backup_current)
+     def restore_profile(self,user_id:int,backup_current=True):return self._call('profile.restore',userId=user_id,backupCurrent=backup_current)
+     def backup_profile(self,user_id:int):return self._call('profile.backup',userId=user_id)
++    def delete_profile(self,user_id:int,expected_profile_id:str,*,confirm_delete=False):
++        """Permanently remove an inactive non-Owner user after a verified file archive."""
++        return self._call('profile.delete',userId=user_id,expectedProfileId=expected_profile_id,confirmDeletion=confirm_delete)
++    def reconcile_profiles(self):return self._call('profile.reconcile')
+     def verify_profile(self,user_id:int):return self._call('profile.verify',userId=user_id)
+     def audit_profile(self,user_id:int):return self._call('profile.audit',userId=user_id)
+     def sync_apps(self):return self._call('apps.sync')

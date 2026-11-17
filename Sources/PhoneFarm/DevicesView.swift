@@ -8,6 +8,7 @@ struct DevicesView: View {
     @ObservedObject var updater: AppUpdater
     @State private var pendingUpdate: AppUpdater.Release?
     @State private var reportsUpdateFailure = false
+    @State private var romDevice: AndroidDevice?
     @State private var proxyDevice: AndroidDevice?
     @State private var threadsDevice: AndroidDevice?
     @State private var profileDevice: AndroidDevice?
@@ -68,6 +69,7 @@ struct DevicesView: View {
         .alert(item: $manager.actionError) { error in
             Alert(title: Text(error.title), message: Text(error.details), dismissButton: .default(Text("Đóng")))
         }
+        .sheet(item: $romDevice) { device in ROMProfilesSheet(device: device, manager: manager) }
         .sheet(item: $proxyDevice) { device in
             ProxySheet(device: device, onActivity: {
                 manager.reportActivity(device, progress: DeviceProgress(message: $0))
@@ -83,9 +85,13 @@ struct DevicesView: View {
         }
         .sheet(item: $threadsDevice) { device in
             ThreadsFeedSheet(device: device) { manager.reportActivity(device, progress: DeviceProgress(message: $0)) }
+                .onAppear { manager.manualDevices.insert(device.id) }
+                .onDisappear { manager.manualDevices.remove(device.id) }
         }
         .sheet(item: $profileDevice) { device in
             ThreadsFeedSheet(device: device, profileOnly: true) { manager.reportActivity(device, progress: DeviceProgress(message: $0)) }
+                .onAppear { manager.manualDevices.insert(device.id) }
+                .onDisappear { manager.manualDevices.remove(device.id) }
         }
         .sheet(item: $infoDevice) { device in
             DeviceInfoSheet(device: device, manager: manager)
@@ -322,7 +328,10 @@ struct DevicesView: View {
                     ForEach(devices) { device in
                         DeviceCard(device: device, manager: manager,
                                    showInfo: { infoDevice = device },
-                                   showProxy: { proxyDevice = device },
+                                   showProxy: {
+                                       if manager.romDevices.contains(device.id) { romDevice = device } else { proxyDevice = device }
+                                   },
+                                   showROMProfiles: { romDevice = device },
                                    openProfile: {
                                        Task { if await manager.openThreads(device) { profileDevice = device } }
                                    },
@@ -409,6 +418,7 @@ private struct DeviceCard: View {
     @ObservedObject var manager: DeviceManager
     let showInfo: () -> Void
     let showProxy: () -> Void
+    let showROMProfiles: () -> Void
     let openProfile: () -> Void
     let autoProfile: () -> Void
     let runThreads: () -> Void
@@ -419,11 +429,12 @@ private struct DeviceCard: View {
     @State private var identityError: String?
     @State private var savingIdentity = false
     @State private var copiedLog = false
+    @State private var rotationMode: ROMProfileRotation.Mode?
 
-    private var isRunning: Bool { manager.runningThreads.contains(device.id) }
+    private var isRunning: Bool { manager.runningThreads.contains(device.id) || manager.stoppingThreads.contains(device.id) }
     private var activity: DeviceManager.Activity? { manager.activities[device.id] }
     private var hasIssue: Bool { activity?.hasIssue == true && !isRunning }
-    private var canUse: Bool { device.isReady && manager.adbError == nil }
+    private var canUse: Bool { device.isReady && manager.adbError == nil && !manager.romChecking.contains(device.id) && !manager.romBusy.contains(device.id) }
     /// Actions on the phone need its proxy; only Proxy, Info and renaming work without it.
     private var canOperate: Bool { canUse && manager.isProxyReady(device) }
 
@@ -444,8 +455,39 @@ private struct DeviceCard: View {
                 installAppsButton(missing)
             }
             proxyRow
+            HStack {
+                if let profile = manager.romProfiles[device.id]?.active {
+                    Label("User \(profile.userID) · \(profile.name)", systemImage: "person.2.crop.square.stack")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else {
+                    Text("Android profiles").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Button("Profiles", action: showROMProfiles)
+                    .buttonStyle(.bordered).controlSize(.small).disabled(!canUse || isRunning)
+            }
             Divider()
             actions
+            if let rotation = manager.profileRotation[device.id] {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let remaining = max(0, Int(ceil(rotation.switchAt?.timeIntervalSince(context.date) ?? 0)))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(rotation.wakeAt.map { "Theo ca nghỉ · chờ chuẩn bị \(rotation.next.name) lúc \($0.formatted(date: .omitted, time: .shortened))" }
+                             ?? (rotation.switchAt == nil ? "Luân phiên · đang chuẩn bị \(rotation.profile.name)"
+                             : rotation.mode == .restWindows ? "\(rotation.profile.name) · khung 3 giờ · tiếp: \(rotation.next.name)"
+                             : "\(rotation.profile.name) · đổi sau \(remaining / 60):\(String(format: "%02d", remaining % 60)) · tiếp: \(rotation.next.name)"))
+                        if rotation.mode == .restWindows, let seconds = rotation.preparationSeconds {
+                            Text("Dự phòng chuyển và chuẩn bị: ~\(Int(ceil(seconds / 60))) phút · tự tăng theo thời gian đo")
+                        }
+                    }.font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else if manager.romDevices.contains(device.id) {
+                Button("Chạy 2 profile theo ca nghỉ…") { rotationMode = .restWindows }
+                    .buttonStyle(.borderedProminent).disabled(!canUse || isRunning || !manager.romCanMutate(device))
+                    .help("Chọn hai profile: A chạy khung 3 giờ rồi B chạy trong lúc A nghỉ 4 giờ. Tự tính thời gian chuyển để chuẩn bị ca tiếp theo.")
+                Button("Đổi profile mỗi 5 phút…") { rotationMode = .fiveMinutes }
+                    .buttonStyle(.bordered).disabled(!canUse || isRunning || !manager.romCanMutate(device))
+            }
             let updatingProfile = manager.updatingProfile.contains(device.id)
             Button(action: autoProfile) {
                 HStack(spacing: 6) {
@@ -468,6 +510,7 @@ private struct DeviceCard: View {
                               lineWidth: isRunning || hasIssue ? 1.5 : 1)
         )
         .opacity(device.isReady ? 1 : 0.7)
+        .sheet(item: $rotationMode) { mode in ROMProfileRotationSheet(device: device, manager: manager, fixedMode: mode) }
     }
 
     private var titleRow: some View {
@@ -736,8 +779,8 @@ private struct DeviceCard: View {
                     .foregroundStyle(tetherColor(state))
             }
             .buttonStyle(.borderless)
-            .disabled(isRunning)
-            .help(isRunning ? "Dừng chu kỳ Threads trước khi đổi mạng." : tetherHelp(state))
+            .disabled(isRunning || manager.romDevices.contains(device.id) || !canUse)
+            .help(manager.romDevices.contains(device.id) ? "Mạng do ROM Profiles quản lý, đổi proxy trong Profiles." : isRunning ? "Dừng chu kỳ Threads trước khi đổi mạng." : tetherHelp(state))
             .accessibilityLabel(mode == .usb ? "Chuyển sang Wi-Fi/SIM của điện thoại (vẫn qua proxy)" : "Chuyển sang mạng qua cáp USB (vẫn qua proxy)")
             .contextMenu {
                 Button("Nối lại mạng") { Task { await manager.startTether(device) } }
@@ -827,14 +870,15 @@ private struct DeviceCard: View {
             Button {
                 manager.stopThreads(device)
             } label: {
-                Label("Đóng", systemImage: "stop.fill")
+                Label(manager.stoppingThreads.contains(device.id) ? "Đang dừng…" : manager.profileRotation[device.id] != nil ? "Dừng luân phiên" : "Đóng", systemImage: "stop.fill")
             }
             .tint(.red)
+            .disabled(manager.stoppingThreads.contains(device.id))
         } else {
             Button(action: runThreads) {
                 Label("Chạy Threads", systemImage: "play.fill")
             }
-            .disabled(!manager.hasRequiredApps(device))
+            .disabled(!manager.canPrepareThreads(device))
             .buttonStyle(.borderedProminent)
             .disabled(!canOperate || isRunning)
         }

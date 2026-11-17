@@ -9,6 +9,8 @@ enum ThreadsAttachments {
         let ids: [Int]
         let paths: [String]
         var reusable: Bool? = nil
+        var profileID: String? = nil
+        var userID: Int? = nil
 
         var isDisposable: Bool {
             reusable != true && album.hasPrefix("PF-") && album.dropFirst(3).count == 32
@@ -34,11 +36,12 @@ enum ThreadsAttachments {
               Set(images).count == 3 else {
             throw ThreadsSettings.SettingsError("Cần đúng ba ảnh khác nhau và app_store.png ở giữa.")
         }
+        let session = try ROMRuntime.shared.session(serial)
         let album = "PF-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let directory = "/sdcard/Pictures/" + album
+        let directory = (session?.mediaRoot ?? "/sdcard/Pictures/") + album
         let names = ["01.png", "02.png", "03.png"]
         let paths = names.map { directory + "/" + $0 }
-        let pending = Batch(album: album, ids: [], paths: paths, reusable: false)
+        let pending = Batch(album: album, ids: [], paths: paths, reusable: false, profileID: session?.profileID, userID: session?.userID)
         do {
             _ = try await command(adb, serial, ["shell", "mkdir", "-p", directory])
             for index in images.indices {
@@ -63,7 +66,7 @@ enum ThreadsAttachments {
                 _ = try await command(adb, serial, ["shell", "content update --uri \(uri) --bind date_added:l:\(date)"])
                 _ = try await command(adb, serial, ["shell", "content update --uri \(uri) --bind is_pending:i:0"])
             }
-            let batch = Batch(album: album, ids: ids, paths: paths, reusable: false)
+            let batch = Batch(album: album, ids: ids, paths: paths, reusable: false, profileID: session?.profileID, userID: session?.userID)
             try await verify(batch, adb: adb, serial: serial)
             progress(DeviceProgress(message: "Đã chuyển đủ 3 ảnh mới", completed: 3, total: 3))
             return batch
@@ -84,7 +87,7 @@ enum ThreadsAttachments {
             ?? ImageCache(album: "PF-CACHE-" + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
         guard cache.isValid else { throw ThreadsSettings.SettingsError("Dữ liệu ảnh đã lưu trên điện thoại không hợp lệ.") }
         try store.saveImageCache(cache, serial: serial)
-        let directory = "/sdcard/Pictures/" + cache.album
+        let directory = ((try ROMRuntime.shared.session(serial))?.mediaRoot ?? "/sdcard/Pictures/") + cache.album
         let hash = SHA256.hash(data: try Data(contentsOf: image, options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
         let name = hash + "-pixels-v1.png"
         let path = directory + "/" + name
@@ -156,10 +159,18 @@ enum ThreadsAttachments {
     static func remove(_ batch: Batch, adb: URL, serial: String) async -> Bool {
         guard batch.isDisposable else { return false }
         do {
+            let current = try ROMRuntime.shared.session(serial)
+            guard batch.profileID == current?.profileID, batch.userID == current?.userID else { return false }
+        } catch { return false }
+        return await removeFiles(batch, adb: adb, serial: serial)
+    }
+
+    private static func removeFiles(_ batch: Batch, adb: URL, serial: String) async -> Bool {
+        do {
             _ = try await command(adb, serial, ["shell", "content delete --uri content://media/external/images/media --where \"relative_path='Pictures/\(batch.album)/'\""])
             // Includes partially transferred files not yet registered by MediaStore.
             // isDisposable restricts this path to a single generated PF-<UUID> album.
-            _ = try await command(adb, serial, ["shell", "rm", "-rf", "/sdcard/Pictures/" + batch.album])
+            _ = try await command(adb, serial, ["shell", "rm", "-rf", ((try ROMRuntime.shared.session(serial))?.mediaRoot ?? "/sdcard/Pictures/") + batch.album])
             let remaining = try await command(adb, serial, ["shell", "content query --uri content://media/external/images/media --projection _id --where \"relative_path='Pictures/\(batch.album)/'\""])
             return !remaining.output.contains("_id=")
         } catch { return false }
@@ -179,6 +190,8 @@ enum ThreadsAttachments {
     }
 
     static func verify(_ batch: Batch, adb: URL, serial: String) async throws {
+        let current = try ROMRuntime.shared.session(serial)
+        guard batch.profileID == current?.profileID, batch.userID == current?.userID else { throw ROMError.wrongProfile }
         let query = "content query --uri content://media/external/file --projection _id --where '(media_type=1 OR media_type=3) AND is_pending=0' --sort 'date_added DESC, _id DESC' | head -n 3"
         let result = try await command(adb, serial, ["shell", query])
         let expression = try NSRegularExpression(pattern: #"_id=(\d+)"#)
@@ -192,7 +205,33 @@ enum ThreadsAttachments {
 
     private static func command(_ adb: URL, _ serial: String, _ arguments: [String]) async throws -> CommandResult {
         try Task.checkCancellation()
-        let result = await (try RunningCommand(adb, arguments: ["-s", serial] + arguments)).result(timeout: 30, outputLimit: 32_000)
+        let session = try ROMRuntime.shared.session(serial)
+        try await ROMRuntime.checkForeground(session, adb: adb, serial: serial)
+        var args = arguments
+        if let session {
+            func quote(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+            if arguments.first == "push", arguments.count == 3 {
+                let path = arguments[2]
+                guard path.hasPrefix(session.mediaRoot), path.range(of: #"[^a-zA-Z0-9/._-]"#, options: .regularExpression) == nil else { throw ROMError.wrongProfile }
+                let staging = "/data/local/tmp/pf-image-" + UUID().uuidString + ".png"
+                let uploaded = await (try RunningCommand(adb, arguments: ["-s", serial, "push", arguments[1], staging])).result(timeout: 30)
+                guard uploaded.status == 0 else {
+                    _ = await (try? RunningCommand(adb, arguments: ["-s", serial, "shell", "rm", "-f", staging]))?.result(timeout: 8)
+                    throw ROMError.failed
+                }
+                // A root copy through emulated storage creates the right per-user media ownership.
+                let script = "cp \(quote(staging)) \(quote(path)); result=$?; rm -f \(quote(staging)); exit $result"
+                args = ["shell", "su", "-c", quote(script)]
+            } else if arguments.first == "shell" {
+                var script = arguments.count == 2 ? arguments[1] : arguments.dropFirst().map(quote).joined(separator: " ")
+                for verb in ["query", "update", "delete"] {
+                    script = script.replacingOccurrences(of: "content \(verb) ", with: "content \(verb) --user \(session.userID) ")
+                }
+                script = script.replacingOccurrences(of: "am broadcast ", with: "am broadcast --user \(session.userID) ")
+                args = ["shell", "su", "-c", quote(script)]
+            }
+        }
+        let result = await (try RunningCommand(adb, arguments: ["-s", serial] + args)).result(timeout: 30, outputLimit: 32_000)
         guard result.status == 0 else { throw ThreadsSettings.SettingsError("Không chuẩn bị được ảnh trên Android. " + result.output.suffix(300)) }
         return result
     }

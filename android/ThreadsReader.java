@@ -161,6 +161,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo option = find(root, "repost_menu_repost_button");
             if (option == null) continue;
             if (findLabel(option, "Remove repost", "Undo repost", "Gỡ bài đăng lại") != null) {
+                AccessibilitySession.requireProfile();
                 automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
                 return outcome("already_reposted");
             }
@@ -231,6 +232,7 @@ public final class ThreadsReader {
             if (window.getType() != AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue;
             AccessibilityNodeInfo keyboard = window.getRoot();
             if (keyboard != null && keyboard.isVisibleToUser()) {
+                AccessibilitySession.requireProfile();
                 automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
                 SystemClock.sleep(450);
                 return;
@@ -259,6 +261,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo root = threadsRoot(automation);
             if (!fullReplyScreen(root)) return null;
             AccessibilityNodeInfo scroll = fullReplyScroll(root);
+            AccessibilitySession.requireProfile();
             if (scroll == null || !scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) break;
             SystemClock.sleep(250);
         }
@@ -272,6 +275,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo editor = find(root, "new_thread_screen_composer");
             if (editor != null) return editor;
             AccessibilityNodeInfo scroll = fullReplyScroll(root);
+            AccessibilitySession.requireProfile();
             if (scroll == null || !scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return null;
             SystemClock.sleep(250);
         }
@@ -454,6 +458,7 @@ public final class ThreadsReader {
             AccessibilityNodeInfo row = find(container, "IgLazyRow");
             if (row != null) return row.getChildCount() == 3;
             AccessibilityNodeInfo scroll = fullReplyScroll(root);
+            AccessibilitySession.requireProfile();
             if (scroll == null || !scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return false;
             SystemClock.sleep(250);
         }
@@ -529,8 +534,10 @@ public final class ThreadsReader {
         down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
         try {
+            AccessibilitySession.requireProfile();
             if (!automation.injectInputEvent(down, true)) return false;
             SystemClock.sleep(45);
+            AccessibilitySession.requireProfile();
             return automation.injectInputEvent(up, true);
         } finally { down.recycle(); up.recycle(); }
     }
@@ -539,6 +546,7 @@ public final class ThreadsReader {
         if (fullReplyScreen(detail)) {
             for (int attempt = 0; attempt < 8 && find(detail, "new_thread_screen_gallery_button") == null; attempt++) {
                 AccessibilityNodeInfo scroll = fullReplyScroll(detail);
+                AccessibilitySession.requireProfile();
                 if (scroll == null || !scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) break;
                 SystemClock.sleep(250);
                 detail = threadsRoot(automation);
@@ -567,6 +575,7 @@ public final class ThreadsReader {
     private static boolean setText(AccessibilityNodeInfo editor, String value) {
         Bundle arguments = new Bundle();
         arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+        AccessibilitySession.requireProfile();
         return editor.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
     }
 
@@ -577,8 +586,9 @@ public final class ThreadsReader {
             return request.optInt("photoID") > 0 ? selectAvatarPhoto(automation) : outcome("avatar_unavailable");
         }
         if (action.equals("confirm_avatar")) return confirmAvatar(automation);
-        if (!action.equals("bio") && !action.equals("avatar")) return outcome("unsupported");
-        if (action.equals("bio") && (bio.isEmpty() || bio.codePointCount(0, bio.length()) > 150)) {
+        if (action.equals("save_bio")) return finishBio(automation, bio);
+        if (!action.equals("prepare_bio") && !action.equals("avatar")) return outcome("unsupported");
+        if (action.equals("prepare_bio") && (bio.isEmpty() || bio.codePointCount(0, bio.length()) > 150)) {
             return outcome("invalid_bio");
         }
         AccessibilityNodeInfo root = threadsRoot(automation);
@@ -597,7 +607,7 @@ public final class ThreadsReader {
                 return outcome("profile_unavailable");
             }
         }
-        return action.equals("bio") ? saveBio(automation, bio) : openAvatarPicker(automation);
+        return action.equals("prepare_bio") ? prepareBio(automation) : openAvatarPicker(automation);
     }
 
     private static JSONObject selectAvatarPhoto(UiAutomation automation) throws JSONException {
@@ -653,7 +663,7 @@ public final class ThreadsReader {
         return outcome("bio_unverified");
     }
 
-    private static JSONObject saveBio(UiAutomation automation, String bio) throws JSONException {
+    private static JSONObject prepareBio(UiAutomation automation) throws JSONException {
         AccessibilityNodeInfo root = threadsRoot(automation);
         AccessibilityNodeInfo label = findLabel(root, "Bio", "Tiểu sử");
         if (label == null || label.getParent() == null) return outcome("bio_unavailable");
@@ -672,18 +682,26 @@ public final class ThreadsReader {
             root = threadsRoot(automation);
             if (findLabel(root, "Edit bio", "Chỉnh sửa tiểu sử") == null) continue;
             AccessibilityNodeInfo editor = findEditable(root);
-            if (editor == null || !setText(editor, bio)) continue;
-            SystemClock.sleep(250);
-            root = threadsRoot(automation);
-            editor = findEditable(root);
-            AccessibilityNodeInfo next = findLabel(root, "Next", "Tiếp");
-            if (editor == null || !bio.equals(editorText(editor)) || next == null
-                    || !press(automation, next)) return outcome("bio_unavailable");
-            AccessibilityNodeInfo done = waitFor(automation, "profile_editor_card_done_button");
-            if (done == null || findLabel(threadsRoot(automation), bio) == null) return outcome("bio_unavailable");
-            return saveEditedProfile(automation, bio);
+            // Clear the previous bio only. Swift types the replacement through Gboard,
+            // using the same native Telex tapper as comments, before calling save_bio.
+            if (editor == null || !setText(editor, "") || !press(automation, editor)) continue;
+            SystemClock.sleep(300);
+            editor = findEditable(threadsRoot(automation));
+            if (editor != null && editor.isFocused() && editorText(editor).isEmpty()) return outcome("bio_ready");
         }
         return outcome("bio_unavailable");
+    }
+
+    private static JSONObject finishBio(UiAutomation automation, String bio) throws JSONException {
+        AccessibilityNodeInfo root = threadsRoot(automation);
+        if (bio.isEmpty() || bio.codePointCount(0, bio.length()) > 150 ||
+                findLabel(root, "Edit bio", "Chỉnh sửa tiểu sử") == null) return outcome("bio_unavailable");
+        AccessibilityNodeInfo editor = findEditable(root);
+        AccessibilityNodeInfo next = findLabel(root, "Next", "Tiếp");
+        if (editor == null || !bio.equals(editorText(editor)) || next == null || !press(automation, next)) return outcome("bio_unavailable");
+        AccessibilityNodeInfo done = waitFor(automation, "profile_editor_card_done_button");
+        if (done == null || findLabel(threadsRoot(automation), bio) == null) return outcome("bio_unavailable");
+        return saveEditedProfile(automation, bio);
     }
 
     private static JSONObject openAvatarPicker(UiAutomation automation) throws JSONException {
@@ -707,15 +725,47 @@ public final class ThreadsReader {
     }
 
     private static JSONObject waitForGallery(UiAutomation automation, String success) throws JSONException {
-        for (int attempt = 0; attempt < 12; attempt++) {
-            SystemClock.sleep(180);
-            if (photoPermission(automation)) return outcome("permission_required");
-            AccessibilityNodeInfo root = threadsRoot(automation);
-            if (find(root, "media_picker_grid_view") != null ||
+        GalleryWait wait = new GalleryWait(SystemClock.uptimeMillis());
+        int lastRemaining = -1;
+        boolean openedPermission = false, attemptedAllow = false;
+        while (true) {
+            AccessibilitySession.requireProfile();
+            if (cancelled()) return outcome("cancelled");
+            boolean permission = photoPermission(automation);
+            long now = SystemClock.uptimeMillis();
+            boolean expired = wait.expired(now, permission);
+            if (permission) {
+                if (expired) return outcome("permission_required");
+                AccessibilityNodeInfo dialog = automation.getRootInActiveWindow();
+                String packageName = dialog == null ? "" : string(dialog.getPackageName());
+                if (!openedPermission && "com.instagram.barcelona".equals(packageName) && find(dialog, "gallery_picker_view") != null) {
+                    AccessibilityNodeInfo enable = findLabel(dialog, "Turn on", "Bật");
+                    if (enable != null) { openedPermission = true; press(automation, enable); }
+                } else if (!attemptedAllow && GalleryPermission.controller(packageName)) {
+                    AccessibilityNodeInfo message = find(dialog, "permission_message");
+                    String prompt = message == null ? permissionText(dialog, 0) : string(message.getText());
+                    if (GalleryPermission.canAllow(packageName, prompt)) {
+                        AccessibilityNodeInfo allow = find(dialog, "permission_allow_all_button");
+                        if (allow == null) allow = find(dialog, "permission_allow_button");
+                        if (allow == null) allow = findLabel(dialog, "Allow", "Cho phép", "Allow all", "Cho phép tất cả");
+                        if (allow != null) {
+                            attemptedAllow = true;
+                            progress("granting_photo_permission", 0, 0);
+                            press(automation, allow);
+                        }
+                    }
+                }
+                int remaining = wait.remainingSeconds(now);
+                if (remaining != lastRemaining) { progress("waiting_photo_permission", 15 - remaining, 15); lastRemaining = remaining; }
+            } else {
+                AccessibilityNodeInfo root = threadsRoot(automation);
+                if (find(root, "media_picker_grid_view") != null ||
                     (findLabel(find(root, "navigation_bar_title"), "Gallery", "Thư viện") != null
                      && findLabel(root, "Done", "Xong") != null)) return outcome(success);
+                if (expired) return outcome("gallery_unavailable");
+            }
+            SystemClock.sleep(150);
         }
-        return outcome("gallery_unavailable");
     }
 
     private static AccessibilityNodeInfo waitFor(UiAutomation automation, String resourceID) {
@@ -740,8 +790,15 @@ public final class ThreadsReader {
     private static boolean photoPermission(UiAutomation automation) {
         AccessibilityNodeInfo root = automation.getRootInActiveWindow();
         return root != null && root.getPackageName() != null &&
-            ("com.android.permissioncontroller".contentEquals(root.getPackageName()) ||
+            (GalleryPermission.controller(root.getPackageName().toString()) ||
              (find(root, "gallery_picker_view") != null && findLabel(root, "Turn on", "Bật") != null));
+    }
+
+    private static String permissionText(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 12) return "";
+        StringBuilder text = new StringBuilder(string(node.getText()));
+        for (int index = 0; index < node.getChildCount(); index++) text.append(' ').append(permissionText(node.getChild(index), depth + 1));
+        return text.toString();
     }
 
     private static boolean replyingTo(AccessibilityNodeInfo detail, String author) {
@@ -799,6 +856,7 @@ public final class ThreadsReader {
     }
 
     private static boolean click(AccessibilityNodeInfo node) {
+        AccessibilitySession.requireProfile();
         return node.isVisibleToUser() && node.isEnabled()
             && node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
     }
@@ -1103,6 +1161,7 @@ public final class ThreadsReader {
                 if (!editorText(editor).isEmpty()) return false;
                 AccessibilityNodeInfo back = find(root, "navigation_bar_back_button");
                 if (back == null || !press(automation, back)) {
+                    AccessibilitySession.requireProfile();
                     automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
                 }
                 // Wait for the transition so another Back cannot close the app.
@@ -1353,6 +1412,7 @@ public final class ThreadsReader {
         MotionEvent event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, 1,
             pointers, coordinates, 0, 0, 1, 1, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
         try {
+            AccessibilitySession.requireProfile();
             return automation.injectInputEvent(event, action != MotionEvent.ACTION_MOVE);
         } finally {
             event.recycle();

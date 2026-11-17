@@ -77,7 +77,7 @@ final class KeyboardTyper {
             String keys = segment.getString("keys");
             String separator = segment.getString("separator");
             typeWord(word, keys, true);
-            boolean addedSpace = !separator.isEmpty() && !word.isEmpty() && commitSuggestion(word, false);
+            boolean addedSpace = !separator.isEmpty() && !word.isEmpty() && commitSuggestion(word);
             if (addedSpace && !separator.equals(" ")) {
                 // Gboard adds a space when accepting a candidate. Remove only that new space
                 // before punctuation; the next tap must not autocorrect the literal word.
@@ -199,23 +199,29 @@ final class KeyboardTyper {
         System.out.flush();
     }
 
-    private boolean commitSuggestion(String word, boolean force) throws Exception {
+    private boolean commitSuggestion(String word) throws Exception {
+        // Gboard updates candidates asynchronously after the last Telex tone/shape key.
+        // Give that update a short settling period before accepting the literal candidate.
+        SystemClock.sleep(100);
         KeyboardReader.Layout state = KeyboardReader.layout(automation);
         Rect suggestion = state.suggestions.get(word);
+        for (int attempt = 0; suggestion == null && attempt < 3; attempt++) {
+            SystemClock.sleep(80);
+            state = KeyboardReader.layout(automation);
+            suggestion = state.suggestions.get(word);
+        }
         Rect q = state.keys.get("q");
         Rect p = state.keys.get("p");
         if (suggestion == null || q == null || p == null || suggestion.bottom > q.top) return false;
-        int middle = (q.centerX() + p.centerX()) / 2;
-        // The middle suggestion is Gboard's default. Choose the literal word only if it differs.
-        if (!force && suggestion.left <= middle && suggestion.right >= middle) return false;
+        // Explicitly accept the exact candidate, including the middle candidate: a Space
+        // can otherwise apply a later autocorrection rather than the word just displayed.
         String before = text();
         tap(suggestion);
         SystemClock.sleep(random.nextLong(140, 221));
         String after = text();
-        if (after.length() != before.length() + 1) return false;
-        int position = 0;
-        while (position < before.length() && before.charAt(position) == after.charAt(position)) position++;
-        return after.charAt(position) == ' ' && after.substring(position + 1).equals(before.substring(position));
+        // Accepting a candidate may correct the composing word as well as append a space.
+        // Detect only that trailing space, without comparing the comment with its requested text.
+        return !before.endsWith(" ") && after.endsWith(" ");
     }
 
     private void pauseAfter(String separator) {
@@ -247,6 +253,7 @@ final class KeyboardTyper {
     }
 
     private void checkFocus() throws TypingFailure {
+        AccessibilitySession.requireProfile();
         if (!cancellationMarker.exists()) throw new TypingFailure("cancelled");
         if (!editor.refresh() || !editor.isFocused() || !editor.isEditable()) throw new TypingFailure("editor_changed");
     }
@@ -287,6 +294,7 @@ final class KeyboardTyper {
             new MotionEvent.PointerProperties[]{finger}, new MotionEvent.PointerCoords[]{point},
             0, 0, 1, 1, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
         try {
+            AccessibilitySession.requireProfile();
             if (!automation.injectInputEvent(event, true)) throw new TypingFailure("input_failed");
         } finally { event.recycle(); }
     }

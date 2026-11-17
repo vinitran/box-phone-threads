@@ -45,7 +45,12 @@ enum AppBundles {
     // MARK: Phone queries
 
     static func installedPackages(adb: URL, serial: String) async -> Set<String>? {
-        guard let command = try? RunningCommand(adb, arguments: ["-s", serial, "shell", "pm", "list", "packages"]) else { return nil }
+        // Android 10's package manager accepts "current" but returns an empty package list.
+        // Resolve it to a numeric ID; IME/settings commands handle "current" independently.
+        guard let current = try? await RunningCommand(adb, arguments: ["-s", serial, "shell", "am", "get-current-user"]).result(timeout: 8),
+              current.status == 0,
+              let user = Int(current.output.trimmingCharacters(in: .whitespacesAndNewlines)), user >= 0,
+              let command = try? RunningCommand(adb, arguments: ["-s", serial, "shell", "pm", "list", "packages", "--user", String(user)]) else { return nil }
         let result = await command.result(timeout: 15)
         guard result.status == 0 else { return nil }
         return Set(result.output.split(whereSeparator: \.isNewline).compactMap { line in
@@ -131,19 +136,7 @@ enum AppBundles {
 
     /// Enables the package's keyboard and selects it. Android lists a newly installed keyboard after a short delay.
     static func makeDefaultKeyboard(_ package: String, adb: URL, serial: String) async throws {
-        for _ in 0..<20 {
-            let list = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "ime", "list", "-a", "-s"])).result(timeout: 10).output
-            if let id = list.split(whereSeparator: \.isNewline).map({ $0.trimmingCharacters(in: .whitespaces) })
-                .first(where: { $0.hasPrefix(package + "/") }) {
-                _ = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "ime", "enable", id])).result(timeout: 10)
-                _ = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "ime", "set", id])).result(timeout: 10)
-                let current = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "settings", "get", "secure", "default_input_method"]))
-                    .result(timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines)
-                if current == id { return }
-            }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        throw BundleError("Chưa đặt được Gboard làm bàn phím mặc định. Hãy chọn Gboard trong Cài đặt → Ngôn ngữ & bàn phím.")
+        try await GboardSetup.selectDefault(package, adb: adb, serial: serial)
     }
 
     // MARK: Prepare and install
@@ -156,9 +149,9 @@ enum AppBundles {
 
     /// Makes sure every app's APKs are on the Mac: downloads missing or changed files from R2,
     /// or uses the last downloaded version when R2 cannot be reached.
-    static func prepare(progress: @MainActor (String) -> Void) async throws -> [Prepared] {
+    static func prepare(selectedApps: [App] = AppBundles.apps, progress: @MainActor (String) -> Void) async throws -> [Prepared] {
         var prepared: [Prepared] = []
-        for app in apps {
+        for app in selectedApps {
             let manifest: Manifest
             do {
                 manifest = try await remoteManifest(app)
@@ -188,6 +181,10 @@ enum AppBundles {
                 await progress("Đang cài \(app.name) \(manifest.versionName)…")
                 _ = try await APKInstaller.install(item.files, adb: adb, serial: serial)
                 results.append("\(app.name) \(manifest.versionName)")
+            }
+            if let session = try ROMRuntime.shared.session(serial) {
+                let enabled = await (try RunningCommand(adb, arguments: ["-s", serial, "shell", "cmd", "package", "install-existing", "--user", String(session.userID), app.package])).result(timeout: 30)
+                guard enabled.status == 0 else { throw ROMError.failed }
             }
             if app == gboard {
                 await progress("Đang đặt Gboard làm bàn phím mặc định…")

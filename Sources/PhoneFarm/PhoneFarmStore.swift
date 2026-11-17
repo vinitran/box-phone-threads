@@ -38,6 +38,7 @@ final class PhoneFarmStore {
         let finishedAt: String?
         let state: String
         let message: String
+        let profileID: String?
     }
 
     struct DeviceInfo {
@@ -54,11 +55,13 @@ final class PhoneFarmStore {
         let errorDescription: String?
     }
 
-    private init() throws {
-        let folder = Self.databaseURL.deletingLastPathComponent()
+    private convenience init() throws { try self.init(databaseURL: Self.databaseURL) }
+
+    init(databaseURL: URL) throws {
+        let folder = databaseURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
-        guard sqlite3_open_v2(Self.databaseURL.path, &database,
+        guard sqlite3_open_v2(databaseURL.path, &database,
                               SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
             let error = failure()
             sqlite3_close(database)
@@ -67,7 +70,7 @@ final class PhoneFarmStore {
         }
         do {
             sqlite3_busy_timeout(database, 3_000)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.databaseURL.path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
             try execute("PRAGMA foreign_keys = ON")
             try execute("PRAGMA journal_mode = WAL")
             let version = try rows("PRAGMA user_version").first?.first ?? nil
@@ -115,6 +118,13 @@ final class PhoneFarmStore {
                     )
                     """)
                 try execute("CREATE INDEX IF NOT EXISTS comments_posted ON comments(posted_at, serial)")
+                for table in ["comments", "runs"] {
+                    if try !rows("PRAGMA table_info(\(table))").contains(where: { $0[1] == "profile_id" }) {
+                        try execute("ALTER TABLE \(table) ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''")
+                    }
+                }
+                try execute("CREATE TABLE IF NOT EXISTS profile_reply_attempts (serial TEXT NOT NULL REFERENCES devices(serial), profile_id TEXT NOT NULL, post_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(serial, profile_id, post_id))")
+
                 if version != "4" {
                     // Runs before version 4 only recorded the send in their summary message.
                     try execute("""
@@ -181,7 +191,7 @@ final class PhoneFarmStore {
     }
 
     func recordComment(serial: String) throws {
-        try execute("INSERT INTO comments(serial, posted_at) VALUES(?, ?)", [serial, now])
+        try execute("INSERT INTO comments(serial, posted_at, profile_id) VALUES(?, ?, ?)", [serial, now, try ROMRuntime.shared.session(serial)?.profileID ?? ""])
     }
 
     /// Number of submitted comments per serial since the given time.
@@ -208,7 +218,7 @@ final class PhoneFarmStore {
     }
 
     func imageCache(serial: String) throws -> ThreadsAttachments.ImageCache? {
-        guard let value = try rows("SELECT value FROM app_settings WHERE key = ?", ["threads-image-cache." + serial]).first?.first ?? nil else { return nil }
+        guard let value = try rows("SELECT value FROM app_settings WHERE key = ?", ["threads-image-cache." + ROMRuntime.shared.namespace(serial)]).first?.first ?? nil else { return nil }
         return try JSONDecoder().decode(ThreadsAttachments.ImageCache.self, from: Data(value.utf8))
     }
 
@@ -216,11 +226,11 @@ final class PhoneFarmStore {
         guard cache.isValid else { throw StoreError(errorDescription: "Thư mục ảnh trên điện thoại không hợp lệ.") }
         let value = String(decoding: try JSONEncoder().encode(cache), as: UTF8.self)
         try execute("INSERT INTO app_settings(key, value, updated_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                    ["threads-image-cache." + serial, value, now])
+                    ["threads-image-cache." + ROMRuntime.shared.namespace(serial), value, now])
     }
 
     func submittedPhotos(serial: String) throws -> [SubmittedPhotos] {
-        guard let value = try rows("SELECT value FROM app_settings WHERE key = ?", ["submitted-photos." + serial]).first?.first ?? nil else { return [] }
+        guard let value = try rows("SELECT value FROM app_settings WHERE key = ?", ["submitted-photos." + ROMRuntime.shared.namespace(serial)]).first?.first ?? nil else { return [] }
         return try JSONDecoder().decode([SubmittedPhotos].self, from: Data(value.utf8))
     }
 
@@ -239,7 +249,7 @@ final class PhoneFarmStore {
     private func saveSubmittedPhotos(_ photos: [SubmittedPhotos], serial: String) throws {
         let value = String(decoding: try JSONEncoder().encode(photos), as: UTF8.self)
         try execute("INSERT INTO app_settings(key, value, updated_at) VALUES(?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                    ["submitted-photos." + serial, value, now])
+                    ["submitted-photos." + ROMRuntime.shared.namespace(serial), value, now])
     }
 
     func remember(_ devices: [AndroidDevice]) throws {
@@ -300,8 +310,8 @@ final class PhoneFarmStore {
         let id = UUID().uuidString
         try transaction {
             try remember(device)
-            try execute("INSERT INTO runs(id, serial, started_at, state, message) VALUES(?, ?, ?, 'running', ?)",
-                        [id, device.serial, now, "Đang mở Threads"])
+            try execute("INSERT INTO runs(id, serial, started_at, state, message, profile_id) VALUES(?, ?, ?, 'running', ?, ?)",
+                        [id, device.serial, now, "Đang mở Threads", try ROMRuntime.shared.session(device.serial)?.profileID ?? ""])
         }
         return id
     }
@@ -314,15 +324,18 @@ final class PhoneFarmStore {
     func deviceInfo(serial: String) throws -> DeviceInfo? {
         guard let device = try rows("SELECT name, last_seen FROM devices WHERE serial = ?", [serial]).first else { return nil }
         let runs = try rows("""
-            SELECT id, started_at, finished_at, state, message FROM runs
+            SELECT id, started_at, finished_at, state, message, profile_id FROM runs
             WHERE serial = ? ORDER BY started_at DESC, rowid DESC LIMIT 20
             """, [serial]).map {
-                Run(id: $0[0]!, startedAt: $0[1]!, finishedAt: $0[2], state: $0[3]!, message: $0[4]!)
+                Run(id: $0[0]!, startedAt: $0[1]!, finishedAt: $0[2], state: $0[3]!, message: $0[4]!, profileID: $0[5]?.isEmpty == false ? $0[5] : nil)
             }
         return DeviceInfo(name: device[0]!, lastSeen: device[1]!, proxy: try savedProxy(serial: serial), runs: runs)
     }
 
     func attemptedReplies(serial: String) throws -> Set<String> {
+        if let profile = try ROMRuntime.shared.session(serial)?.profileID {
+            return Set(try rows("SELECT post_id FROM profile_reply_attempts WHERE serial = ? AND profile_id = ?", [serial, profile]).compactMap { $0[0] })
+        }
         let key = "threads.attemptedReplies." + serial
         if let legacy = UserDefaults.standard.stringArray(forKey: key) {
             try transaction {
@@ -337,6 +350,15 @@ final class PhoneFarmStore {
     }
 
     func reserveReply(serial: String, postID: String) throws -> Bool {
+        if let profile = try ROMRuntime.shared.session(serial)?.profileID {
+            var reserved = false
+            try transaction {
+                try execute("INSERT OR IGNORE INTO profile_reply_attempts(serial, profile_id, post_id, created_at) VALUES(?, ?, ?, ?)", [serial, profile, postID, now])
+                reserved = sqlite3_changes(database) == 1
+                try execute("DELETE FROM profile_reply_attempts WHERE serial = ? AND profile_id = ? AND post_id NOT IN (SELECT post_id FROM profile_reply_attempts WHERE serial = ? AND profile_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 300)", [serial, profile, serial, profile])
+            }
+            return reserved
+        }
         var reserved = false
         try transaction {
             try execute("INSERT OR IGNORE INTO reply_attempts(serial, post_id, created_at) VALUES(?, ?, ?)",
@@ -351,6 +373,10 @@ final class PhoneFarmStore {
     }
 
     func releaseReply(serial: String, postID: String) throws {
+        if let profile = try ROMRuntime.shared.session(serial)?.profileID {
+            try execute("DELETE FROM profile_reply_attempts WHERE serial = ? AND profile_id = ? AND post_id = ?", [serial, profile, postID])
+            return
+        }
         try execute("DELETE FROM reply_attempts WHERE serial = ? AND post_id = ?", [serial, postID])
     }
 

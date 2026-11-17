@@ -1,0 +1,42 @@
+--- a/profile-manager/src/vn/romprofiles/Backend.java
++++ b/profile-manager/src/vn/romprofiles/Backend.java
+@@ -19,6 +19,15 @@
+     private static final SecureRandom RANDOM=new SecureRandom();
+     private static String cmd(String... args)throws Exception{return FilesUtil.command(90,args);}
+     private static int current()throws Exception{return Integer.parseInt(cmd("am","get-current-user").trim());}
++    private static void awaitUserUnlocked(int uid)throws Exception{
++        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
++        do{
++            String state=FilesUtil.command(5,"cmd","activity","get-started-user-state",String.valueOf(uid));
++            if("RUNNING_UNLOCKED".equals(state.trim()))return;
++            Thread.sleep(250);
++        }while(System.nanoTime()<deadline);
++        throw new IOException("Selected Android user did not reach RUNNING_UNLOCKED; profile data retained");
++    }
+     private static File profileFile(int uid){return new File(PROFILES,"user-"+uid+".json");}
+     private static JSONObject profile(int uid)throws Exception{
+         if(uid<0 || !profileFile(uid).isFile())throw new IOException("Profile is not managed by this tool");
+@@ -243,8 +252,14 @@
+             if(enforced)NetworkProxy.apply(p.optJSONObject("proxy"),uid);
+             bluetoothPower=BluetoothRadio.suspendForUserSwitch();
+             WifiRadio.apply(p);
+-            cmd("am","start-user","-w",String.valueOf(uid));mirror(uid);sync();
++            // Samsung's ported Android 10 can leave start-user -w waiting for
++            // an unlock callback even when get-started-user-state is UNLOCKED.
++            // Start without that callback, select the user, then verify actual
++            // credential storage readiness before touching its app files.
++            cmd("am","start-user",String.valueOf(uid));
+             WifiRadio.switchForeground(uid);
++            awaitUserUnlocked(uid);
++            mirror(uid);sync();
+             // Normal users are retained, not deleted. Stop inactive secondary
+             // users before releasing a guard for an explicitly unproxied profile.
+             for(JSONObject kept:profiles()){
+--- a/profile-manager/AndroidManifest.xml
++++ b/profile-manager/AndroidManifest.xml
+@@ -1,4 +1,4 @@
+-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="vn.romprofiles" android:versionCode="6" android:versionName="1.4.1">
++<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="vn.romprofiles" android:versionCode="7" android:versionName="1.4.2">
+     <uses-sdk android:minSdkVersion="27" android:targetSdkVersion="29" />
+     <application android:label="ROM Profiles" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:icon="@android:drawable/ic_menu_myplaces">
+         <activity android:name=".MainActivity" android:exported="true">

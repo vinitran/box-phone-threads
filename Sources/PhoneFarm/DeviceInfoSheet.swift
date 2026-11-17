@@ -10,6 +10,7 @@ struct DeviceInfoSheet: View {
     @State private var number = ""
     @State private var identityStatus: String?
     @State private var savingIdentity = false
+    @State private var showDeviceProfiles = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -18,7 +19,12 @@ struct DeviceInfoSheet: View {
             identityEditor
             if let info {
                 Text("Lần kết nối gần nhất · " + date(info.lastSeen)).foregroundStyle(.secondary)
-                if let proxy = info.proxy {
+                if manager.romDevices.contains(device.id) {
+                    if let profile = manager.romProfiles[device.id]?.active {
+                        Text("Profile đang dùng · \(profile.name) · User \(profile.userID)")
+                        Text("Proxy profile · \(profile.proxy?.address ?? "chưa có")").textSelection(.enabled)
+                    }
+                } else if let proxy = info.proxy {
                     Text("Proxy đã lưu · " + (proxy.endpoint?.address ?? "Chưa có địa chỉ"))
                         .textSelection(.enabled)
                     Text("Lần kiểm tra proxy · " + date(proxy.updatedAt)).font(.caption).foregroundStyle(.secondary)
@@ -39,6 +45,11 @@ struct DeviceInfoSheet: View {
                                     Spacer()
                                     Text(state(run.state)).font(.caption)
                                 }
+                                if let profileID = run.profileID {
+                                    let profile = manager.romProfiles[device.id]?.profiles.first { $0.id == profileID }
+                                    Text("Profile · \(profile?.name ?? String(profileID.prefix(8)))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                                 Text(run.message).font(.callout).textSelection(.enabled)
                                 if let end = run.finishedAt {
                                     Text("Kết thúc · " + date(end)).font(.caption).foregroundStyle(.secondary)
@@ -53,12 +64,14 @@ struct DeviceInfoSheet: View {
             if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
             HStack {
                 Button("Đọc lại", action: load)
+                Button("Thư viện cấu hình QA…") { showDeviceProfiles = true }
                 Spacer()
                 Button("Đóng") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }
         .padding(22)
         .frame(width: 560)
+        .sheet(isPresented: $showDeviceProfiles) { DeviceProfilesSheet(device: device) }
         .task {
             load()
             let identity = manager.identities[device.id]
@@ -78,7 +91,7 @@ struct DeviceInfoSheet: View {
                         .disabled(savingIdentity || !device.isReady)
                 }
                 .textFieldStyle(.roundedBorder)
-                Text("File \(DeviceIdentity.path) · Proxy trên máy: \(manager.identities[device.id]?.proxyAddress ?? "chưa có")")
+                Text("File \(DeviceIdentity.path) · Proxy trên máy: \(manager.proxyAddress(device) ?? "chưa có")")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 if let identityStatus { Text(identityStatus).font(.caption) }
             }

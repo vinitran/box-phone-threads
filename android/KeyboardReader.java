@@ -74,7 +74,10 @@ public final class KeyboardReader {
         String raw = Normalizer.normalize(label, Normalizer.Form.NFC).trim();
         String key = keyName(raw);
         if (key != null) {
-            if (!layout.keys.containsKey(key)) layout.keys.put(key, new Rect(rect));
+            // A prediction can itself be a single letter. It appears before the real
+            // keyboard in the accessibility tree, so keep the lower (keyboard-row) key.
+            Rect previous = layout.keys.get(key);
+            if (previous == null || rect.centerY() > previous.centerY()) layout.keys.put(key, new Rect(rect));
             if (raw.matches("[A-Z]")) layout.uppercase.add(key);
         } else if (!raw.isEmpty()) {
             layout.suggestions.put(raw, new Rect(rect));

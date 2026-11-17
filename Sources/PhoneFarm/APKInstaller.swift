@@ -25,8 +25,11 @@ enum APKInstaller {
             }
         }
         guard !apks.isEmpty else { throw InstallError("Không tìm thấy file APK nào để cài.") }
+        let session = try ROMRuntime.shared.session(serial)
+        try await ROMRuntime.checkForeground(session, adb: adb, serial: serial)
+        let user = session.map { ["--user", String($0.userID)] } ?? []
         // -r keeps the app's data when it is already installed.
-        let mode = apks.count == 1 ? ["install", "-r"] : ["install-multiple", "-r"]
+        let mode = (apks.count == 1 ? ["install"] : ["install-multiple"]) + user + ["-r"]
         let command = try RunningCommand(adb, arguments: ["-s", serial] + mode + apks.map(\.path))
         let result = await command.result(timeout: 600)
         guard result.status == 0, result.output.contains("Success") else {

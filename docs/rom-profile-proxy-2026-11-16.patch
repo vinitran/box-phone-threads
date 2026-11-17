@@ -1,0 +1,337 @@
+--- a/profile-manager/src/vn/romprofiles/Backend.java
++++ b/profile-manager/src/vn/romprofiles/Backend.java
+@@ -223,9 +223,8 @@
+     }
+     private static JSONObject create(JSONObject options)throws Exception{
+         String requestedName=options.optString("name","").trim();if(requestedName.length()>80||requestedName.indexOf('\n')>=0||requestedName.indexOf('\r')>=0)throw new IllegalArgumentException("Invalid profile name");
+-        JSONObject proxy=NetworkProxy.prepare(options!=null&&options.has("proxy")?options.optJSONObject("proxy"):profile(current()).optJSONObject("proxy"));
+-        if(!"none".equals(proxy.getString("type")))NetworkProxy.test(proxy);
+         if(profiles().size()>=16)throw new IOException("Giới hạn 16 profile; tool không tự xóa profile cũ.");
++        JSONObject proxy=NetworkProxy.forNewProfile(options.optJSONObject("proxy"),profiles());
+         int before=current();backup(before);
+         event("create","Đang tạo môi trường Android riêng");
+         String name=options.optString("name","").trim();if(name.isEmpty())name="ROM Profile "+String.format(Locale.ROOT,"%02d",profiles().size());
+@@ -475,7 +474,7 @@
+                 // Android JSON parser exceptions can echo the entire request, including secrets.
+                 String message=e instanceof JSONException?"Malformed request or profile JSON":String.valueOf(e.getMessage());
+                 boolean busy=e instanceof IOException&&message.startsWith("BUSY:");
+-                String code=e instanceof ProfileDeletion.Pending?"RESULT_UNKNOWN":busy?"BUSY":e instanceof IllegalArgumentException||e instanceof JSONException?"INVALID_ARGUMENT":e instanceof SecurityException?"ROOT_REQUIRED":"DEVICE_ERROR";
++                String code=e instanceof NetworkProxy.Failure?((NetworkProxy.Failure)e).code:e instanceof ProfileDeletion.Pending?"RESULT_UNKNOWN":busy?"BUSY":e instanceof IllegalArgumentException||e instanceof JSONException?"INVALID_ARGUMENT":e instanceof SecurityException?"ROOT_REQUIRED":"DEVICE_ERROR";
+                 if(!busy&&!failedAction.equals("status")&&!failedAction.equals("identity"))event("error",message);
+                 System.out.println(new JSONObject().put("ok",false).put("apiVersion",1).put("errorCode",code).put("error",message));
+             }catch(Exception ignored){System.out.println("{\"ok\":false,\"errorCode\":\"DEVICE_ERROR\",\"error\":\"Backend failed\"}");}
+--- a/profile-manager/src/vn/romprofiles/NetworkProxy.java
++++ b/profile-manager/src/vn/romprofiles/NetworkProxy.java
+@@ -11,6 +11,10 @@
+ 
+ /** Root-side proxy policy, including explicit fail-closed TCP/DNS enforcement. */
+ public final class NetworkProxy {
++    public static final class Failure extends IOException {
++        public final String code;
++        public Failure(String code,String message){super(message);this.code=code;}
++    }
+     public static final int RELAY_PORT=18081;
+     public static final File ACTIVE=new File(FilesUtil.ROOT,"proxy-active.json");
+     private static ConnectivityManager manager;
+@@ -33,9 +37,10 @@
+         if(raw==null||"none".equals(raw.optString("type","none")))return none();
+         if(!"http".equals(raw.optString("type")))throw new IllegalArgumentException("Only HTTP upstream proxies are supported");
+         String host=raw.optString("host","");int port=raw.optInt("port",0);
+-        if(!host.matches("[A-Za-z0-9][A-Za-z0-9.-]{0,252}")||port<1||port>65535)throw new IllegalArgumentException("Invalid proxy host or port");
++        if(host.length()>253||port<1||port>65535)throw new IllegalArgumentException("Invalid proxy host or port");
++        for(String label:host.split("\\.",-1))if(!label.matches("[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"))throw new IllegalArgumentException("Invalid proxy hostname");
+         String user=raw.optString("username","");String pass=raw.optString("password","");
+-        if(user.contains(":")||user.contains("\r")||user.contains("\n")||pass.contains("\r")||pass.contains("\n")||user.length()>256||pass.length()>1024)throw new IllegalArgumentException("Invalid proxy credentials");
++        if(user.contains(":")||user.contains("\r")||user.contains("\n")||pass.contains("\r")||pass.contains("\n")||user.length()>256||pass.length()>1024||(user.isEmpty()&&!pass.isEmpty()))throw new IllegalArgumentException("Invalid proxy credentials");
+         JSONObject out=new JSONObject().put("type","http").put("host",host).put("port",port).put("username",user).put("password",pass);
+         String transport=raw.optString("transport","device");
+         if(!transport.equals("device")&&!transport.equals("adb-reverse"))throw new IllegalArgumentException("Unsupported proxy transport");
+@@ -123,18 +128,32 @@
+         return new JSONObject().put("ok",true).put("proxy",redact(config)).put("localRelayPort",RELAY_PORT);
+     }
+     public static JSONObject test(JSONObject raw)throws Exception{
+-        JSONObject config=prepare(raw);
++        JSONObject config=normalize(raw);
+         if("none".equals(config.getString("type")))return new JSONObject().put("ok",true).put("mode","direct");
+-        String[] probeRule=NetworkGuard.allowProbe(config);
+-        try(Socket socket=new Socket()){
+-            ProxyRelay.connectUpstream(socket,config);socket.setSoTimeout(12000);
+-            String request="CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n"+ProxyRelay.authorization(config)+"\r\n";
+-            socket.getOutputStream().write(request.getBytes("ISO-8859-1"));socket.getOutputStream().flush();
+-            String response=ProxyRelay.readHeaders(socket.getInputStream());
+-            int code=ProxyRelay.status(response);
+-            if(code!=200)throw new IOException("Upstream proxy CONNECT status "+code);
+-            return new JSONObject().put("ok",true).put("connectStatus",code).put("proxy",redact(config));
+-        }finally{NetworkGuard.finishProbe(probeRule);}
++        try{
++            config=prepare(config);String[] probeRule=NetworkGuard.allowProbe(config);
++            try(Socket socket=new Socket()){
++                ProxyRelay.connectUpstream(socket,config);
++                String ip=HttpsProxyProbe.test(socket,ProxyRelay.authorization(config));
++                return new JSONObject().put("ok",true).put("connectStatus",200).put("httpStatus",200).put("egressIP",ip).put("proxy",redact(config));
++            }finally{NetworkGuard.finishProbe(probeRule);}
++        }catch(Exception e){
++            String message=String.valueOf(e.getMessage()).contains("CONNECT status 407")?"Upstream proxy CONNECT status 407":"Could not verify HTTPS Internet access through proxy";
++            throw new Failure("PROXY_TEST_FAILED",message);
++        }
++    }
++    /** Called under the backend lock, before any backup or Android user creation. */
++    public static JSONObject forNewProfile(JSONObject raw,List<JSONObject> profiles)throws Exception{
++        if(raw==null||!"http".equals(raw.optString("type")))throw new Failure("PROXY_REQUIRED","A new profile requires its own HTTP proxy");
++        JSONObject config=normalize(raw);
++        if(!"enforced".equals(config.optString("routing"))||!"device".equals(config.optString("transport")))throw new Failure("PROXY_REQUIRED","A new profile requires enforced standalone proxy routing");
++        for(JSONObject profile:profiles){
++            JSONObject other=profile.optJSONObject("proxy");
++            if(other!=null&&"http".equals(other.optString("type"))&&config.getString("host").equalsIgnoreCase(other.optString("host"))&&config.getInt("port")==other.optInt("port"))throw new Failure("DUPLICATE_PROXY","Proxy host and port already belong to another profile");
++        }
++        JSONObject report=test(config);
++        // Preserve the resolved endpoint used by the successful test for activation.
++        return prepare(report.getJSONObject("proxy").put("username",config.getString("username")).put("password",config.getString("password")));
+     }
+     public static JSONObject maintain()throws Exception{
+         if(ACTIVE.isFile()){
+--- a/rom_profiles_sdk.py
++++ b/rom_profiles_sdk.py
+@@ -61,8 +61,11 @@
+         """Preview two synthetic IMEIs; does not reserve or modify a profile."""
+         if model not in ('SM-G960N','SM-G960F'):raise ValueError('No reviewed test IMEI TAC for model')
+         return self._call('imei.generate',model=model)
+-    def create_profile(self,proxy:Optional[ProxyConfig]=None,inherit_proxy=True):
+-        return self._call('profile.create',**({'proxy':proxy.to_request()} if proxy else {} if inherit_proxy else {'proxy':{'type':'none'}}))
++    def create_profile(self,proxy:Optional[ProxyConfig]=None,inherit_proxy=False):
++        """An explicit unique proxy must pass the phone's HTTPS preflight before creation."""
++        if proxy is None:raise ValueError('A new profile requires an explicit proxy; inheritance is disabled')
++        if proxy.routing!='enforced' or proxy.transport!='device' or proxy.exclusions:raise ValueError('A new profile requires enforced device proxy routing without exclusions')
++        return self._call('profile.create',proxy=proxy.to_request())
+     def activate_profile(self,user_id:int,backup_current=True):return self._call('profile.activate',userId=user_id,backupCurrent=backup_current)
+     def restore_profile(self,user_id:int,backup_current=True):return self._call('profile.restore',userId=user_id,backupCurrent=backup_current)
+     def backup_profile(self,user_id:int):return self._call('profile.backup',userId=user_id)
+--- a/profile-manager/AndroidManifest.xml
++++ b/profile-manager/AndroidManifest.xml
+@@ -1,4 +1,4 @@
+-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="vn.romprofiles" android:versionCode="8" android:versionName="1.5.0">
++<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="vn.romprofiles" android:versionCode="9" android:versionName="1.5.1">
+     <uses-sdk android:minSdkVersion="27" android:targetSdkVersion="29" />
+     <application android:label="ROM Profiles" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:icon="@android:drawable/ic_menu_myplaces">
+         <activity android:name=".MainActivity" android:exported="true">
+--- a/tools/test_sdk.py
++++ b/tools/test_sdk.py
+@@ -25,8 +25,17 @@
+     def test_timeout_does_not_retry_a_mutation(self):
+         import subprocess
+         with patch('rom_profiles_sdk.subprocess.run',side_effect=subprocess.TimeoutExpired('adb',1)) as run:
+-            with self.assertRaises(ProfileError) as ctx:ProfileClient(transport=AdbTransport('fixture')).create_profile()
++            with self.assertRaises(ProfileError) as ctx:ProfileClient(transport=AdbTransport('fixture')).create_profile(ProxyConfig('proxy.example',8080,routing='enforced'))
+             self.assertEqual(ctx.exception.code,'RESULT_UNKNOWN');self.assertEqual(run.call_count,1)
++    def test_create_requires_explicit_enforced_proxy_before_adb(self):
++        client=ProfileClient(transport=AdbTransport('fixture'))
++        with patch('rom_profiles_sdk.subprocess.run') as run:
++            for kwargs in ({},{'inherit_proxy':True},{'inherit_proxy':False},{'proxy':ProxyConfig('proxy.example',8080)},{'proxy':ProxyConfig('proxy.example',8080,transport='adb-reverse')}):
++                with self.assertRaises(ValueError):client.create_profile(**kwargs)
++            run.assert_not_called()
++        with patch('rom_profiles_sdk.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout='{"ok":true,"apiVersion":1}')) as run:
++            client.create_profile(ProxyConfig('proxy.example',8080,routing='enforced'))
++            self.assertEqual(json.loads(run.call_args.kwargs['input'])['proxy']['routing'],'enforced')
+     def test_server_error_code_is_preserved(self):
+         with patch('rom_profiles_sdk.subprocess.run',return_value=SimpleNamespace(returncode=1,stdout='{"ok":false,"errorCode":"INVALID_ARGUMENT","error":"Invalid port"}')):
+             with self.assertRaises(ProfileError) as ctx:ProfileClient(transport=AdbTransport('fixture')).get_proxy(14)
+--- /dev/null
++++ b/profile-manager/src/vn/romprofiles/HttpsProxyProbe.java
+@@ -0,0 +1,109 @@
++package vn.romprofiles;
++
++import java.io.*;
++import java.net.*;
++import java.nio.charset.StandardCharsets;
++import java.util.*;
++import javax.net.ssl.*;
++
++/** An authenticated CONNECT must carry a verified HTTPS response, not just return 200. */
++public final class HttpsProxyProbe {
++    private static final String HOST="api.ipify.org";
++    private static final int LIMIT=128;
++    private HttpsProxyProbe(){}
++
++    public static String test(Socket upstream,String authorization)throws Exception{
++        Timer deadline=new Timer("proxy-probe-deadline",true);
++        deadline.schedule(new TimerTask(){public void run(){try{upstream.close();}catch(IOException ignored){}}},40000);
++        try{return request(upstream,authorization);}finally{deadline.cancel();}
++    }
++    private static String request(Socket upstream,String authorization)throws Exception{
++        upstream.setSoTimeout(12000);
++        write(upstream,"CONNECT "+HOST+":443 HTTP/1.1\r\nHost: "+HOST+":443\r\n"+authorization+"\r\n");
++        Response connect=headers(upstream.getInputStream());
++        if(connect.status!=200)throw new IOException("Upstream proxy CONNECT status "+connect.status);
++        SSLSocketFactory factory=(SSLSocketFactory)SSLSocketFactory.getDefault();
++        try(SSLSocket tls=(SSLSocket)factory.createSocket(upstream,HOST,443,true)){
++            tls.setSoTimeout(12000);
++            SSLParameters parameters=tls.getSSLParameters();
++            parameters.setEndpointIdentificationAlgorithm("HTTPS");
++            parameters.setServerNames(Collections.singletonList(new SNIHostName(HOST)));
++            tls.setSSLParameters(parameters);tls.startHandshake();
++            // Proxy credentials are sent only to CONNECT, never inside the HTTPS request.
++            write(tls,"GET / HTTP/1.1\r\nHost: "+HOST+"\r\nAccept: text/plain\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
++            InputStream input=tls.getInputStream();Response response=headers(input);
++            if(response.status!=200)throw new IOException("HTTPS probe status "+response.status);
++            String ip=body(input,response).trim();
++            if(!validIP(ip))throw new IOException("HTTPS probe returned an invalid IP address");
++            return ip;
++        }
++    }
++    private static void write(Socket socket,String value)throws IOException{
++        socket.getOutputStream().write(value.getBytes(StandardCharsets.ISO_8859_1));socket.getOutputStream().flush();
++    }
++    private static class Response {
++        int status;Map<String,String> fields=new HashMap<>();
++    }
++    private static String line(InputStream input,int limit)throws IOException{
++        ByteArrayOutputStream out=new ByteArrayOutputStream();
++        while(out.size()<limit){
++            int b=input.read();if(b<0)throw new EOFException("Incomplete HTTPS probe response");
++            if(b=='\n'){
++                byte[] bytes=out.toByteArray();
++                if(bytes.length==0||bytes[bytes.length-1]!='\r')throw new IOException("Invalid HTTP line");
++                return new String(bytes,0,bytes.length-1,StandardCharsets.ISO_8859_1);
++            }
++            out.write(b);
++        }
++        throw new IOException("HTTPS probe header too large");
++    }
++    private static Response headers(InputStream input)throws IOException{
++        Response response=new Response();String first=line(input,4096);String[] parts=first.split(" ",3);
++        if(parts.length<2||!parts[0].matches("HTTP/1\\.[01]")||!parts[1].matches("[0-9]{3}"))throw new IOException("Invalid HTTP status");
++        response.status=Integer.parseInt(parts[1]);int total=first.length();
++        while(total<32768){
++            String field=line(input,4096);total+=field.length()+2;if(field.isEmpty())return response;
++            int colon=field.indexOf(':');if(colon<1)throw new IOException("Invalid HTTP header");
++            String key=field.substring(0,colon).trim().toLowerCase(Locale.ROOT);
++            if(response.fields.put(key,field.substring(colon+1).trim())!=null&&(key.equals("content-length")||key.equals("transfer-encoding")))throw new IOException("Ambiguous HTTP framing");
++        }
++        throw new IOException("HTTPS probe header too large");
++    }
++    private static int size(String value,int radix)throws IOException{
++        try{long n=Long.parseLong(value,radix);if(n<0||n>LIMIT)throw new NumberFormatException();return (int)n;}
++        catch(NumberFormatException e){throw new IOException("HTTPS probe body too large or invalid");}
++    }
++    private static void read(InputStream input,ByteArrayOutputStream output,int count)throws IOException{
++        if(output.size()+count>LIMIT)throw new IOException("HTTPS probe body too large");
++        for(int i=0;i<count;i++){int b=input.read();if(b<0)throw new EOFException("Incomplete HTTPS probe body");output.write(b);}
++    }
++    private static String body(InputStream input,Response response)throws IOException{
++        ByteArrayOutputStream output=new ByteArrayOutputStream();
++        String transfer=response.fields.get("transfer-encoding"),length=response.fields.get("content-length");
++        if(transfer!=null){
++            if(length!=null||!transfer.equalsIgnoreCase("chunked"))throw new IOException("Unsupported HTTP framing");
++            int chunks=0;
++            while(++chunks<=LIMIT+1){
++                String chunk=line(input,256).split(";",2)[0];int n=size(chunk.trim(),16);
++                if(n==0){
++                    int trailers=0;String trailer;
++                    do{trailer=line(input,4096);trailers+=trailer.length()+2;if(trailers>32768)throw new IOException("HTTPS probe trailers too large");}while(!trailer.isEmpty());
++                    return output.toString("US-ASCII");
++                }
++                read(input,output,n);if(!line(input,2).isEmpty())throw new IOException("Invalid chunk terminator");
++            }
++            throw new IOException("Too many HTTPS probe chunks");
++        }
++        if(length!=null)read(input,output,size(length,10));
++        else{int b;while((b=input.read())!=-1){if(output.size()>=LIMIT)throw new IOException("HTTPS probe body too large");output.write(b);}}
++        return output.toString("US-ASCII");
++    }
++    private static boolean validIP(String ip){
++        if(ip.matches("[0-9a-fA-F:]+")&&ip.contains(":")){
++            try{return InetAddress.getByName(ip) instanceof Inet6Address;}catch(Exception ignored){return false;}
++        }
++        String[] parts=ip.split("\\.",-1);if(parts.length!=4)return false;
++        for(String part:parts)if(!part.matches("[0-9]{1,3}")||Integer.parseInt(part)>255)return false;
++        return true;
++    }
++}
+--- /dev/null
++++ b/tools/test_https_proxy.py
+@@ -0,0 +1,85 @@
++#!/usr/bin/env python3
++"""Exercise the production HTTPS proxy probe against local CONNECT/TLS fixtures; no ADB."""
++from pathlib import Path
++import socketserver,ssl,subprocess,tempfile,threading
++
++SOURCE=Path(__file__).resolve().parents[1]/'profile-manager/src/vn/romprofiles/HttpsProxyProbe.java'
++HARNESS='''import vn.romprofiles.HttpsProxyProbe;import java.net.*;
++public class ProbeTest { public static void main(String[] args)throws Exception{
++ try(Socket socket=new Socket("127.0.0.1",Integer.parseInt(args[0]))){
++  System.out.println(HttpsProxyProbe.test(socket,"Proxy-Authorization: Basic Zml4dHVyZTpzZWNyZXQ=\\r\\n"));
++ }catch(Exception e){System.out.println("REJECTED: "+e.getClass().getSimpleName()+": "+e.getMessage());System.exit(1);}
++}}'''
++
++def headers(sock):
++    data=b''
++    while not data.endswith(b'\r\n\r\n'):
++        part=sock.recv(1)
++        if not part:raise EOFError()
++        data+=part
++        if len(data)>32768:raise AssertionError('Oversized request')
++    return data
++
++def run(command):
++    return subprocess.run(list(map(str,command)),check=True,capture_output=True,text=True)
++
++class Server(socketserver.TCPServer):allow_reuse_address=True
++
++with tempfile.TemporaryDirectory(prefix='rom-proxy-qa-') as temporary:
++    directory=Path(temporary)
++    (directory/'ProbeTest.java').write_text(HARNESS)
++    run(['javac','-d',directory,SOURCE,directory/'ProbeTest.java'])
++    run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',directory/'ca.key','-out',directory/'ca.crt','-days','1','-subj','/CN=Local fixture CA'])
++    for name,hostname in [('good','api.ipify.org'),('wrong','wrong.example')]:
++        run(['openssl','req','-newkey','rsa:2048','-nodes','-keyout',directory/(name+'.key'),'-out',directory/(name+'.csr'),'-subj','/CN='+hostname])
++        (directory/(name+'.ext')).write_text('subjectAltName=DNS:'+hostname+'\nextendedKeyUsage=serverAuth\n')
++        run(['openssl','x509','-req','-in',directory/(name+'.csr'),'-CA',directory/'ca.crt','-CAkey',directory/'ca.key','-CAcreateserial','-out',directory/(name+'.crt'),'-days','1','-extfile',directory/(name+'.ext')])
++    run(['keytool','-importcert','-noprompt','-alias','fixture','-file',directory/'ca.crt','-keystore',directory/'trust.jks','-storepass','fixture-only'])
++    cases=[
++        ('content-length',b'HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\n203.0.113.10',True),
++        ('chunked',b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nB\r\n2001:db8::1\r\n0\r\n\r\n',True),
++        ('connection-close',b'HTTP/1.1 200 OK\r\n\r\n203.0.113.10',True),
++        ('407',b'',False),('connect-only',b'',False),
++        ('untrusted-certificate',b'',False),('wrong-hostname',b'',False),
++        ('http-503',b'HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n',False),
++        ('html-body',b'HTTP/1.1 200 OK\r\n\r\n<html>Login required</html>',False),
++        ('invalid-ip',b'HTTP/1.1 200 OK\r\n\r\n999.2.3.4',False),
++        ('truncated',b'HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\n203.0',False),
++        ('oversized',b'HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n',False),
++        ('ambiguous-framing',b'HTTP/1.1 200 OK\r\nContent-Length: 12\r\nTransfer-Encoding: chunked\r\n\r\n',False),
++    ]
++    for name,response,expected in cases:
++        observed=[];failures=[]
++        class Handler(socketserver.BaseRequestHandler):
++            def handle(self):
++                try:
++                    self.request.settimeout(5)
++                    connect=headers(self.request);observed.append(connect)
++                    assert connect.startswith(b'CONNECT api.ipify.org:443 HTTP/1.1\r\n')
++                    assert b'Proxy-Authorization: Basic Zml4dHVyZTpzZWNyZXQ=' in connect
++                    if name=='407':self.request.sendall(b'HTTP/1.1 407 Proxy Authentication Required\r\n\r\n');return
++                    self.request.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
++                    if name=='connect-only':return
++                    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++                    cert='wrong' if name=='wrong-hostname' else 'good'
++                    context.load_cert_chain(directory/(cert+'.crt'),directory/(cert+'.key'))
++                    with context.wrap_socket(self.request,server_side=True) as tls:
++                        request=headers(tls);observed.append(request)
++                        assert request.startswith(b'GET / HTTP/1.1\r\nHost: api.ipify.org\r\n')
++                        assert b'Authorization' not in request and b'Zml4dHVyZTpzZWNyZXQ=' not in request
++                        tls.sendall(response)
++                except (ssl.SSLError,EOFError,ConnectionError):pass
++                except Exception as error:failures.append(error)
++        with Server(('127.0.0.1',0),Handler) as server:
++            thread=threading.Thread(target=server.handle_request,daemon=True);thread.start()
++            command=['java']
++            if name!='untrusted-certificate':command+=['-Djavax.net.ssl.trustStore='+str(directory/'trust.jks'),'-Djavax.net.ssl.trustStorePassword=fixture-only']
++            result=subprocess.run(command+['-cp',str(directory),'ProbeTest',str(server.server_address[1])],capture_output=True,text=True,timeout=15)
++            thread.join(6)
++        assert not thread.is_alive() and not failures,(name,failures)
++        assert (result.returncode==0)==expected,(name,result.stdout,result.stderr)
++        assert observed,(name,'Probe did not use the configured proxy')
++        if expected:assert len(observed)==2
++        if name=='407':assert 'CONNECT status 407' in result.stdout
++        print('PASS:',name)
++    print('PASS: 13 production CONNECT/TLS/HTTP/IP cases; credentials only sent to proxy')

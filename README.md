@@ -98,6 +98,32 @@ Nếu SQLite còn khóa chưa mã hóa từ bản cũ, lệnh dùng khóa đó r
 
 Script build ký app bằng chứng chỉ **Apple Development** nếu có, hoặc chứng chỉ chỉ định bằng biến `PHONE_FARM_SIGN_IDENTITY`, để giữ nguyên danh tính app giữa các lần build.
 
+## Nhiều profile trên một máy có ROM Profiles
+
+Từ app local 0.1.44, luồng Threads và đổi bio tự bật/chọn Gboard, cấu hình Tiếng Việt và chọn đúng ngôn ngữ trước khi gõ. Chỉ thiếu Gboard thì app tự chuẩn bị gói bàn phím cho đúng profile. [Cách hoạt động và test trên máy thật](docs/gboard-auto-setup-2026-11-17.md).
+
+Bản local 0.1.46 đã kiểm tra gõ tiếng Việt trên cả hai profile và chạy lượt tự động đầu tiên. Bổ sung lối khởi chạy hai profile có xác thực qua stdin khi Mac đang khóa màn hình. [Kết quả chạy đêm](docs/overnight-two-profile-2026-11-17.md).
+
+Bấm **Profiles** trên thẻ máy để dùng các Android user thật của engine trong `~/Documents/rom`: tạo profile, chuyển lại profile cũ, gắn proxy HTTP riêng, sao lưu và ghi nhãn tài khoản Threads. App nhận diện engine trước khi chọn tuyến mạng; máy này dùng proxy ép tuyến trên điện thoại thay cho VPN cũ. Profile chưa có proxy không thể được kích hoạt từ app. Đăng nhập Threads một lần trong từng user; dữ liệu, ảnh, hàng đợi xóa ảnh và lịch sử reply được tách theo profile UUID. Chỉ một profile hoạt động trên một máy tại một thời điểm.
+
+Xem [cách dùng, cơ chế khóa và giới hạn của tích hợp ROM Profiles](docs/rom-profiles-integration.md).
+
+App local 0.1.43 thêm nút **Chạy 2 profile theo ca nghỉ…**: A chạy khung 3 giờ rồi B chạy trong lúc A nghỉ; chỉ đổi khi bàn giao ca và chuẩn bị sớm theo thời gian chuyển đo được. Giữ lựa chọn đổi mỗi 5 phút. [Kịch bản mẫu và kiểm tra](docs/two-profile-schedule-2026-11-17.md).
+
+Từ app 0.1.42 / engine 1.5.1, tạo profile mới **bắt buộc có proxy riêng**. Dán một dòng `host:port:username:password` trong Profiles; app tự kiểm tra HTTPS và đọc IP qua proxy trước khi tạo. Proxy thiếu, trùng hoặc lỗi sẽ dừng, không tạo Android user. Proxy lưu theo profile trên điện thoại. Xem [kết quả kiểm tra](docs/profile-proxy-2026-11-16.md).
+
+Trong **Profiles**, có thể đặt tên/tạo profile với proxy riêng, hoặc chọn profile không hoạt động → **Xoá…**. Engine 1.5.0 bắt buộc sao lưu và xác nhận đúng user trước khi xoá; Owner và profile đang dùng được bảo vệ. Trên thẻ máy, bấm **Chạy tự động với đổi profile · 5 phút…**, chọn ít nhất hai profile để chạy lần lượt rồi lặp lại. Hết 5 phút, app ngắt lượt đang chạy, đóng Threads, sao lưu/chuyển và xác minh proxy của profile kế tiếp. Lịch bình luận và lịch nghỉ được giữ riêng khi quay lại từng profile. Xem [luồng mới và kết quả kiểm tra](docs/profile-rotation-2026-11-15.md).
+
+Kiểm tra Play Integrity trên máy Android 10 có root ngày 15/11/2026 mới đạt **BASIC**, chưa đạt **DEVICE/STRONG**. Kiểm tra profile/định danh của engine không phải chứng nhận Google. Xem [kết quả đo, bản sửa engine và cách hoàn tác mô-đun thử nghiệm](docs/play-integrity-check-2026-11-15.md). Phone Farm không tự cài mô-đun này lên các máy khác.
+
+## Thư viện cấu hình thông tin máy
+
+Mở **Thông tin → Thư viện cấu hình QA…** để đọc các thuộc tính hiện tại qua ADB, lưu hiện trạng, **Random & lưu profile**, đổi tên và chọn lại profile cũ. Mỗi profile lưu nguyên bộ giá trị và seed; chọn lại không random lần nữa. Có thể xuất/nhập JSON để chuyển thư viện sang Mac khác cho cùng điện thoại. Thư viện lưu riêng theo serial ADB tại `~/Library/Application Support/Phone Farm/device-profiles/`, được ghi nguyên tử; file lỗi không tự bị thay bằng thư viện trống.
+
+**Thư viện này chỉ tạo/lưu/xem cấu hình kiểm thử; không áp dụng lên Android.** Nó hoạt động độc lập với nút Profiles dùng engine ROM ở trên. Các mẫu random là cấu hình QA với build ID `PFTEST.*`, `userdebug/test-keys`; fingerprint ghép đúng brand/product/device và các trường build. Bộ sinh v2 dùng seed cho model, locale/timezone và incremental, giữ phiên bản Android/SDK đã đọc. Mẫu model hiện có dành cho Android 10; OS khác giữ model đã chụp. Nút **Đồng bộ thuộc tính QA** sửa bản cũ và sao lưu nguyên file gốc. `serial` ở cấp thư viện là mã ADB của máy vật lý; UUID ở mỗi profile là định danh riêng. Seed không phải Android ID. Không có chức năng đổi IMEI, serial phần cứng, vượt Play Integrity hoặc khôi phục dữ liệu đăng nhập. Việc chọn một profile không thay đổi ROM, không khởi động lại máy và không xóa dữ liệu ứng dụng.
+
+Xem [nghiên cứu ROM nền và công việc còn lại](docs/device-profiles-custom-rom.md).
+
 ## File nhận diện trên điện thoại
 
 Mỗi điện thoại có thể lưu file `/sdcard/PhoneFarm/device.json` gồm **tên**, **số máy** và **proxy** của máy. Phone Farm đọc file khi máy kết nối: thẻ máy hiển thị tên và số máy, danh sách xếp theo số máy, ô tìm kiếm tìm được theo tên. Số máy hiển thị trong ô đầu thẻ, tên máy là tiêu đề thẻ. Bấm vào tên máy trên thẻ để sửa tên và số máy rồi **Lưu** (cũng sửa được trong **Thông tin → Nhận diện lưu trên điện thoại**). Khi **Áp dụng** proxy thành công, proxy (cả tài khoản và mật khẩu) được ghi vào file; **Gỡ proxy** xóa nó khỏi file.

@@ -296,14 +296,12 @@ struct TelexTyping {
     }
 
     func prepare(for keys: [Character]) async throws -> KeyboardContext {
+        try await GboardSetup.selectDefault(AppBundles.gboard.package, adb: adb, serial: serial)
         // A pulled-down notification shade covers the keyboard, so Android reports only part of its keys.
         _ = try? await command(["shell", "cmd statusbar collapse"])
         try await Task.sleep(for: .milliseconds(300))
+        try await GboardSetup.selectVietnamese(adb: adb, serial: serial)
         let context = try await keyboardContext()
-        let ime = try await command(["shell", "settings", "get", "secure", "default_input_method"])
-        guard ime.output.hasPrefix("com.google.android.inputmethod.latin/") else {
-            throw TypingError.wrongKeyboard
-        }
         if keys.contains(KeyboardLayout.enter) {
             let editor = try await command(["shell", "dumpsys input_method | grep -A 2 -E 'mCurrentTextBoxAttribute:|mCurAttribute=' || true"])
             guard Self.allowsNewline(editor.output) else { throw TypingError.newlineUnavailable }
@@ -465,6 +463,8 @@ struct TelexTyping {
 
     private func command(_ arguments: [String]) async throws -> CommandResult {
         try Task.checkCancellation()
+        let session = try ROMRuntime.shared.session(serial)
+        try await ROMRuntime.checkForeground(session, adb: adb, serial: serial)
         let process = try RunningCommand(adb, arguments: ["-s", serial] + arguments)
         let result = await process.result(timeout: 8)
         try Task.checkCancellation()

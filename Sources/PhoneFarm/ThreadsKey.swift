@@ -31,6 +31,15 @@ enum ThreadsKey {
         unlocked = key.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    static func unlockFromStandardInput() throws {
+        guard let url = encryptedFile, let password = readLine(strippingNewline: true),
+              !password.isEmpty, password.utf8.count <= 1024 else { throw EncryptedKey.Failure.invalidFile }
+        let data = try Data(contentsOf: url)
+        let key = try EncryptedKey.decrypt(data, password: password)
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw EncryptedKey.Failure.invalidFile }
+        unlocked = key.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// `PhoneFarm --encrypt-threads-key [output]`: encrypts the key with a new password.
     /// Uses the plaintext key left in SQLite by older builds, then deletes it.
     static func encryptFromTerminal(output: String?) -> Int32 {

@@ -53,6 +53,7 @@ enum ThreadsComment {
         let keys = try Telex.keys(for: text)
         try ThreadsLoop.checkDeadline(deadline)
         guard kind.allows(text) else { return "invalid_reply" }
+        try await GboardSetup.ensure(adb: adb, serial: serial) { message in progress(DeviceProgress(message: message)) }
         try await ThreadsAttachments.cleanupSubmitted(adb: adb, serial: serial)
         let batch: ThreadsAttachments.Batch?
         if kind.photoCount > 0 {

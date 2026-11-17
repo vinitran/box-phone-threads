@@ -285,6 +285,13 @@ struct ThreadsFeedSheet: View {
         status = "Đang mở trình chỉnh sửa hồ sơ Threads…"
         defer { isWorking = false }
         do {
+            if action == "bio" {
+                let saved = try await ProfileAutomation.updateBio(bio: bio, adb: adb, serial: device.serial) { message in
+                    status = message
+                }
+                status = saved == "bio_saved" ? "Bio mới đã xuất hiện trên hồ sơ." : "Đã bấm lưu. Hãy kiểm tra bio trên hồ sơ."
+                return
+            }
             var request = ProfileAction(action: action, bio: action == "bio" ? bio : nil)
             if action == "avatar" {
                 guard let avatarImage else {
@@ -297,7 +304,9 @@ struct ThreadsFeedSheet: View {
             }
             let payload = try JSONEncoder().encode(request)
             let output = try await AndroidAccessibility.read(adb: adb, serial: device.serial, entry: .threadsProfile,
-                                                             timeout: 75, payload: payload)
+                                                             timeout: 75, payload: payload) { update in
+                if ["waiting_photo_permission", "granting_photo_permission"].contains(update.stage) { await MainActor.run { status = update.deviceProgress.message } }
+            }
             guard output.status == 0, let line = output.output.split(whereSeparator: \.isNewline).last else {
                 status = "Threads chưa xác nhận cập nhật hồ sơ."
                 return
